@@ -1,1 +1,9 @@
+# IDE и Редакторы
 .idea
+
+# Конфигурации и Секреты
+**/.env
+**/.env.*
+**/configs/.env
+configs/.env
+guide/
