@@ -1,7 +1,7 @@
-// Файл: cmd/server/main.go
 package main
 
 import (
+	"chess-monolith/internal/users"
 	"log"
 	"os"
 
@@ -38,19 +38,27 @@ func main() {
 	}
 
 	dsn := os.Getenv("DB_DSN")
-	log.Printf("DEBUG: DSN is %s", dsn)
-
 	port := os.Getenv("PORT")
+	jwtSecret := os.Getenv("JWT_SECRET")
 
-	_, err := gorm.Open(postgres.Open(dsn), &gorm.Config{}) //11
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
 	log.Println("Connected to database")
 
-	// TODO (инициализация репозиториев и сервисов)
+	if err := db.AutoMigrate(&users.User{}); err != nil {
+		log.Fatalf("Error creating users table: %v", err)
+	}
+	log.Println("Created users table")
+
+	userRepo := users.NewRepository(db)
+	userService := users.NewService(userRepo, jwtSecret)
+	userHandler := users.NewHandler(userService)
 
 	router := SetupRouter()
+
+	userHandler.SetupRoutes(router)
 
 	log.Println("Starting server on port " + port)
 	if err := router.Run(":" + port); err != nil {
