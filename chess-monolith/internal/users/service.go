@@ -3,13 +3,9 @@ package users
 import (
 	"chess-monolith/pkg/jwtutil"
 	"errors"
+	"fmt"
 
 	"golang.org/x/crypto/bcrypt"
-)
-
-var (
-	ErrUserExists         = errors.New("user with this email already exists")
-	ErrInvalidCredentials = errors.New("invalid email or password")
 )
 
 type Service interface {
@@ -28,13 +24,17 @@ func NewService(repo Repository, jwtSecret string) Service {
 
 func (s *service) Register(username string, email string, password string) error {
 	_, err := s.repo.GetUserByEmail(email)
-	if err == nil {
+	if err != nil {
+		if !errors.Is(err, ErrUserNotFound) {
+			return err
+		}
+	} else {
 		return ErrUserExists
 	}
 
 	hashedBytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to hash password: %w", err)
 	}
 
 	user := &User{
@@ -50,7 +50,11 @@ func (s *service) Register(username string, email string, password string) error
 func (s *service) Login(email string, password string) (string, error) {
 	user, err := s.repo.GetUserByEmail(email)
 	if err != nil {
-		return "", ErrInvalidCredentials
+		if errors.Is(err, ErrUserNotFound) {
+			return "", ErrInvalidCredentials
+		}
+
+		return "", err
 	}
 
 	err = bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(password))
@@ -60,7 +64,7 @@ func (s *service) Login(email string, password string) (string, error) {
 
 	token, err := jwtutil.GenerateToken(user.ID.String(), s.jwtSecret)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to generate JWT: %w", err)
 	}
 
 	return token, nil
