@@ -2,14 +2,7 @@ package users
 
 import (
 	"chess-monolith/pkg/jwtutil"
-	"errors"
-
 	"golang.org/x/crypto/bcrypt"
-)
-
-var (
-	ErrUserExists         = errors.New("user with this email already exists")
-	ErrInvalidCredentials = errors.New("invalid email or password")
 )
 
 type Service interface {

@@ -1,6 +1,8 @@
 package users
 
 import (
+	"errors"
+
 	"gorm.io/gorm"
 )
 
@@ -20,15 +22,26 @@ func NewRepository(db *gorm.DB) Repository {
 
 func (r *repository) CreateUser(user *User) error {
 	// gorm.DB.Create генерирует INSERT INTO users ...
-	return r.db.Create(user).Error
+	if err := r.db.Create(user).Error; err != nil {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+			return ErrUserExists
+		}
+		return ErrDatabase
+	}
+
+	return nil
 }
 
 func (r *repository) GetUserByEmail(email string) (*User, error) {
 	var user User
 	// gorm.DB.First генерирует SELECT * FROM users WHERE users.email = email LIMIT 1
 	err := r.db.Where("email = ?", email).First(&user).Error
+
 	if err != nil {
-		return nil, err
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, ErrDatabase
 	}
 	return &user, nil
 }
