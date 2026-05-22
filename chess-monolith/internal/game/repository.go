@@ -10,7 +10,7 @@ import (
 type Repository interface {
 	CreateGame(game *Game) error
 	GetGame(id uuid.UUID) (*Game, error)
-	UpdateGame(game *Game) error
+	UpdateGame(id uuid.UUID, boardStateJSON, status, turn string) error
 }
 
 type repository struct {
@@ -35,8 +35,12 @@ func (r *repository) GetGame(id uuid.UUID) (*Game, error) {
 	return &game, err
 }
 
-func (r *repository) UpdateGame(game *Game) error {
-	result := r.db.Model(&Game{}).Where("id = ?", game.ID).Updates(game)
+func (r *repository) UpdateGame(id uuid.UUID, boardStateJSON, status, turn string) error {
+	result := r.db.Model(&Game{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"board_state": boardStateJSON,
+		"status":      status,
+		"turn":        turn,
+	})
 
 	if result.Error != nil {
 		return ErrDatabase

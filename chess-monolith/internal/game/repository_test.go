@@ -29,9 +29,10 @@ func TestRepository_CreateGame(t *testing.T) {
 		testGame := &Game{
 			WhiteID:    uuid.New(),
 			BlackID:    uuid.New(),
+			Mode:       "classic",
+			Turn:       "white",
 			Status:     "active",
-			BoardState: `{"pieces": [{"type": "king", "pos": "e1"}]}`,
-			Config:     `{"size": 8}`,
+			BoardState: `{"Grid": {}}`,
 		}
 
 		err := repo.CreateGame(testGame)
@@ -50,29 +51,27 @@ func TestRepository_UpdateGame(t *testing.T) {
 		testGame := &Game{
 			WhiteID:    uuid.New(),
 			BlackID:    uuid.New(),
+			Mode:       "classic",
+			Turn:       "white",
 			Status:     "active",
-			BoardState: `{"pieces": [{"type": "king", "pos": "e1"}]}`,
-			Config:     `{"size": 8}`,
+			BoardState: `{"Grid": {}}`,
 		}
 
 		err := repo.CreateGame(testGame)
 		require.NoError(t, err)
 
-		testGame.Status = "white_won"
-		err = repo.UpdateGame(testGame)
+		newState := `{"Grid": {"0,0": {"Type": "rook"}}}`
+		err = repo.UpdateGame(testGame.ID, newState, "checkmate", "black")
 		require.NoError(t, err)
 
-		final, _ := repo.GetGame(testGame.ID)
-		assert.Equal(t, "white_won", final.Status)
+		updatedGame, _ := repo.GetGame(testGame.ID)
+		assert.Equal(t, newState, updatedGame.BoardState)
+		assert.Equal(t, "checkmate", updatedGame.Status)
+		assert.Equal(t, "black", updatedGame.Turn)
 	})
 
 	t.Run("Update Non-existent Game", func(t *testing.T) {
-		fakeGame := &Game{
-			ID:     uuid.New(),
-			Status: "draw",
-		}
-
-		err := repo.UpdateGame(fakeGame)
+		err := repo.UpdateGame(uuid.New(), `{"Grid": {}}`, "checkmate", "black")
 		assert.ErrorIs(t, err, ErrGameNotFound)
 	})
 }
