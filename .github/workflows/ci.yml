@@ -11,6 +11,10 @@ jobs:
     name: Build and Test
     runs-on: ubuntu-latest
 
+    defaults:
+      run:
+        working-directory: chess-monolith
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -22,7 +26,9 @@ jobs:
           cache: true
 
       - name: Install dependencies
-        run: go mod download
+        run: |
+          go mod tidy
+          go mod download
 
       - name: Run tests
         run: go test -v -race ./...
