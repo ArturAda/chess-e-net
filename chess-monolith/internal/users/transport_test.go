@@ -3,7 +3,6 @@ package users
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -69,7 +68,7 @@ func TestHandler_Register_Scenarios(t *testing.T) {
 				Password: "password",
 			},
 			setupMock: func(mockService *MockService, request RegisterRequest) {
-				mockService.On("Register", request.Username, request.Email, request.Password).Return(errors.New("db down"))
+				mockService.On("Register", request.Username, request.Email, request.Password).Return(ErrDatabase)
 			},
 			expectedStatus: http.StatusInternalServerError,
 		},
@@ -148,7 +147,7 @@ func TestHandler_Login_Scenarios(t *testing.T) {
 				Password: "password123",
 			},
 			setupMock: func(mockService *MockService, request LoginRequest) {
-				mockService.On("Login", request.Email, request.Password).Return("", errors.New("db down"))
+				mockService.On("Login", request.Email, request.Password).Return("", ErrDatabase)
 			},
 			expectedStatus: http.StatusInternalServerError,
 		},

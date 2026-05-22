@@ -1,7 +1,6 @@
 package users
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -45,7 +44,7 @@ func TestService_Login_InvalidCreds(t *testing.T) {
 	service := NewService(mockRepo, "secret")
 
 	// Возвращаем ошибку при попытке получить пользователя по email, что имитирует отсутствие такого пользователя
-	mockRepo.On("GetUserByEmail", "wrong@mail.com").Return(nil, errors.New("not found"))
+	mockRepo.On("GetUserByEmail", "wrong@mail.com").Return(nil, ErrUserNotFound)
 
 	token, err := service.Login("wrong@mail.com", "any")
 

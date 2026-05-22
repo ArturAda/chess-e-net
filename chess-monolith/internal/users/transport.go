@@ -2,6 +2,7 @@ package users
 
 import (
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -15,7 +16,7 @@ type RegisterRequest struct {
 
 type LoginRequest struct {
 	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required"`
+	Password string `json:"password" binding:"required,min=6"`
 }
 
 type Handler struct {
@@ -47,6 +48,13 @@ func (h *Handler) Register(c *gin.Context) {
 			c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
 			return
 		}
+
+		if errors.Is(err, ErrDatabase) {
+			log.Printf("[ERROR] Database failure during registration: %v", err)
+		} else {
+			log.Printf("[ERROR] Unknown failure during registration: %v", err)
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 		return
 	}
@@ -68,6 +76,13 @@ func (h *Handler) Login(c *gin.Context) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
 			return
 		}
+
+		if errors.Is(err, ErrDatabase) {
+			log.Printf("[ERROR] Database failure during login: %v", err)
+		} else {
+			log.Printf("[ERROR] Unknown failure during login: %v", err)
+		}
+
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
 		return
 	}
