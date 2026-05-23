@@ -1,4 +1,3 @@
-// Файл: internal/ws/handlers.go
 package ws
 
 import (
@@ -22,7 +21,7 @@ var upgrader = websocket.Upgrader{
 }
 
 // ServeWS обрабатывает GET /ws запросы от браузера
-func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string) gin.HandlerFunc {
+func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string, qm QueueManager) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString := c.Query("token")
 		if tokenString == "" {
@@ -51,11 +50,12 @@ func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string) gin.HandlerF
 		}
 
 		client := &Client{
-			Hub:    hub,
-			Conn:   conn,
-			Send:   make(chan []byte, 256),
-			UserID: userID,
-			Rating: rating,
+			Hub:          hub,
+			Conn:         conn,
+			Send:         make(chan []byte, 256),
+			UserID:       userID,
+			Rating:       rating,
+			QueueManager: qm,
 		}
 
 		client.Hub.Register <- client
