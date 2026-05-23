@@ -62,7 +62,14 @@ func TestMatchmaker_CasualMatch(t *testing.T) {
 	mm.AddPlayer(c2, "classic", false, 10*time.Minute)
 
 	go mm.Run()
-	time.Sleep(1 * time.Second)
+	select {
+	case <-c1.Send:
+		// Даем воркеру 100мс, чтобы он успел выполнить строку:
+		// m.casualQueues[key] = queue[2:]
+		time.Sleep(100 * time.Millisecond)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for casual match")
+	}
 
 	mm.mu.Lock()
 	key := QueueKey{Mode: "classic", TimeLimit: 10 * time.Minute}
@@ -82,7 +89,12 @@ func TestMatchmaker_RankedMatch_Success(t *testing.T) {
 	mm.AddPlayer(c2, "classic", true, 10*time.Minute)
 
 	go mm.Run()
-	time.Sleep(1 * time.Second)
+	select {
+	case <-c1.Send:
+		time.Sleep(100 * time.Millisecond)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for casual match")
+	}
 
 	mm.mu.Lock()
 	key := QueueKey{Mode: "classic", TimeLimit: 10 * time.Minute}
