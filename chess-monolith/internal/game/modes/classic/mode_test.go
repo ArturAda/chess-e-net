@@ -4,6 +4,7 @@ import (
 	"chess-monolith/internal/game/core"
 	"chess-monolith/internal/game/session"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -11,7 +12,7 @@ import (
 func setupTestSession() *session.GameSession {
 	reg := core.NewRegistry()
 	Register(reg)
-	s, _ := session.NewSession(reg, "classic")
+	s, _ := session.NewSession(reg, "classic", 10*time.Minute)
 	return s
 }
 
@@ -162,7 +163,7 @@ func TestLongGamePlaythrough_WithStateValidation(t *testing.T) {
 	}
 
 	// Финальная проверка шаха
-	engine := &ClassicMode{}
+	engine := &Mode{}
 	isCheck := engine.isKingInCheck(s.Board, core.Black)
 	assert.True(t, isCheck, "Black king should be in check after 20. Qg4+")
 }

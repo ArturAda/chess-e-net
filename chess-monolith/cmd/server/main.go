@@ -37,7 +37,7 @@ func initGameRegistry() *core.Registry {
 }
 
 // SetupRouter настраивает middlewares и эндпоинты
-func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Repository, jwtSecret string) *gin.Engine {
+func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Repository, jwtSecret string, qm ws.QueueManager, gameRepo game.Repository) *gin.Engine {
 	router := gin.Default()
 
 	config := cors.DefaultConfig()
@@ -49,7 +49,7 @@ func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Reposit
 		c.JSON(200, gin.H{"status": "ok", "message": "pong"})
 	})
 
-	router.GET("/ws", ws.ServeWS(hub, userRepo, jwtSecret))
+	router.GET("/ws", ws.ServeWS(hub, userRepo, jwtSecret, qm))
 
 	userHandler.SetupRoutes(router)
 
@@ -78,7 +78,7 @@ func main() {
 	gameRepo := game.NewRepository(db)
 
 	// 4. Фоновые процессы (горутины)
-	matchmaker := matchmaking.NewMatchmaker(registry, gameRepo)
+	matchmaker := matchmaking.NewMatchmaker(registry, gameRepo, userRepo)
 	go matchmaker.Run()
 
 	hub := ws.NewHub()
@@ -89,7 +89,7 @@ func main() {
 	userHandler := users.NewHandler(userService)
 
 	// 6. Роутинг и запуск сервера
-	router := SetupRouter(userHandler, hub, userRepo, jwtSecret)
+	router := SetupRouter(userHandler, hub, userRepo, jwtSecret, matchmaker, gameRepo)
 
 	log.Println("Starting server on port " + port)
 	if err := router.Run(":" + port); err != nil {

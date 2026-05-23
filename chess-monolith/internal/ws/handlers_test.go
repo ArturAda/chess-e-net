@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -21,6 +22,15 @@ func (d *DummyUserRepository) GetUserByEmail(_ string) (*users.User, error) { re
 func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
 	return nil, nil
 }
+func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
+	return nil
+}
+
+type DummyQueueManager struct{}
+
+func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ bool, _ time.Duration) {
+}
+func (d *DummyQueueManager) RemovePlayer(_ *Client) {}
 
 func TestServeWS_NoToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -28,8 +38,9 @@ func TestServeWS_NoToken(t *testing.T) {
 
 	hub := NewHub()
 	dummyRepo := &DummyUserRepository{}
+	dummyQM := &DummyQueueManager{}
 
-	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret"))
+	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret", dummyQM))
 
 	w := httptest.NewRecorder()
 	// Делаем запрос без query параметра ?token=
@@ -48,8 +59,9 @@ func TestServeWS_InvalidToken(t *testing.T) {
 
 	hub := NewHub()
 	dummyRepo := &DummyUserRepository{}
+	dummyQM := &DummyQueueManager{}
 
-	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret"))
+	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret", dummyQM))
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/ws?token=fake_invalid_token", nil)
@@ -67,8 +79,9 @@ func TestServeWS_UpgradeError(t *testing.T) {
 
 	hub := NewHub()
 	dummyRepo := &DummyUserRepository{}
+	dummyQM := &DummyQueueManager{}
 
-	router.GET("/ws", ServeWS(hub, dummyRepo, "secret"))
+	router.GET("/ws", ServeWS(hub, dummyRepo, "secret", dummyQM))
 
 	validToken, err := jwtutil.GenerateToken("test_user_id", "secret")
 	require.NoError(t, err)

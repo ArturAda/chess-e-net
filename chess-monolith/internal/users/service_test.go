@@ -36,6 +36,11 @@ func (m *MockRepository) GetUserByID(id uuid.UUID) (*User, error) {
 	return args.Get(0).(*User), args.Error(1)
 }
 
+func (m *MockRepository) UpdateRatings(winnerID, loserID uuid.UUID, winnerRating, loserRating int) error {
+	args := m.Called(winnerID, loserID, winnerRating, loserRating)
+	return args.Error(0)
+}
+
 func TestService_Register_UserExists(t *testing.T) {
 	mockRepo := new(MockRepository)
 	service := NewService(mockRepo, "secret")

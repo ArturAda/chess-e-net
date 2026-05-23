@@ -22,10 +22,11 @@ func mockServeWS(hub *Hub) http.HandlerFunc {
 		}
 
 		client := &Client{
-			Hub:    hub,
-			Conn:   conn,
-			Send:   make(chan []byte, 256),
-			UserID: "test_user_id",
+			Hub:          hub,
+			Conn:         conn,
+			Send:         make(chan []byte, 256),
+			UserID:       "test_user_id",
+			QueueManager: &DummyQueueManager{},
 		}
 		client.Hub.Register <- client
 
@@ -91,9 +92,11 @@ func TestWritePump_ChannelClosed(t *testing.T) {
 		close(ch)
 
 		client := &Client{
-			Hub:  hub,
-			Conn: conn,
-			Send: ch,
+			Hub:          hub,
+			Conn:         conn,
+			Send:         ch,
+			UserID:       "test_user_id",
+			QueueManager: &DummyQueueManager{},
 		}
 
 		// Запускаем WritePump. Так как канал ch закрыт (!ok),
@@ -140,7 +143,7 @@ func TestClient_ReadPump_ValidJSON(t *testing.T) {
 	time.Sleep(50 * time.Millisecond) // Ждем регистрацию
 
 	// Формируем сообщение, которое соответствует структуре WSMessage
-	wsMsg := WSMessage{
+	wsMsg := Message{
 		Type:    "JOIN_QUEUE",
 		Payload: json.RawMessage(`{"mode": "blitz"}`),
 	}
@@ -230,4 +233,61 @@ func TestClient_Disconnect(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	assert.Equal(t, 0, hub.Len(), "Client should be removed after disconnect")
+}
+
+func TestClient_ReadPump_JoinQueue(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(mockServeWS(hub))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	wsMsg := Message{
+		Type:    "JOIN_QUEUE",
+		Payload: json.RawMessage(`{"mode": "classic", "is_ranked": true, "time_limit": 10}`),
+	}
+
+	err = conn.WriteJSON(wsMsg)
+	assert.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	assert.Equal(t, 1, hub.Len(), "Client should still be connected after valid JOIN_QUEUE")
+}
+
+func TestClient_ReadPump_Move(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(mockServeWS(hub))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	wsMsg := Message{
+		Type:    "MOVE",
+		Payload: json.RawMessage(`{"from": {"X": 4, "Y": 1}, "to": {"X": 4, "Y": 3}}`),
+	}
+
+	err = conn.WriteJSON(wsMsg)
+	assert.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, hub.Len(), "Client should survive a MOVE payload parse")
 }

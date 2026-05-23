@@ -8,11 +8,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// Контракт работы с БД
+// Repository описывает контракт работы с БД
 type Repository interface {
 	CreateUser(user *User) error
 	GetUserByEmail(email string) (*User, error)
 	GetUserByID(id uuid.UUID) (*User, error)
+	UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error
 }
 
 type repository struct {
@@ -63,4 +64,16 @@ func (r *repository) GetUserByID(id uuid.UUID) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+func (r *repository) UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&User{}).Where("id = ?", user1ID).Update("rating", newRating1).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&User{}).Where("id = ?", user2ID).Update("rating", newRating2).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }

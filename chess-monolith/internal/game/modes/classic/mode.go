@@ -12,13 +12,13 @@ func abs(x int) int {
 	return x
 }
 
-type ClassicMode struct{}
+type Mode struct{}
 
 func Register(r *core.Registry) {
-	r.Register("classic", &ClassicMode{})
+	r.Register("classic", &Mode{})
 }
 
-func (m *ClassicMode) Setup() *core.Board {
+func (m *Mode) Setup() *core.Board {
 	b := core.NewBoard(8, 8)
 
 	newPiece := func(figureType string, color core.Color) core.Piece {
@@ -39,7 +39,7 @@ func (m *ClassicMode) Setup() *core.Board {
 	return b
 }
 
-func (m *ClassicMode) validateGeometry(board *core.Board, piece core.Piece, from, to core.Pos, targetOk bool) error {
+func (m *Mode) validateGeometry(board *core.Board, piece core.Piece, from, to core.Pos, targetOk bool) error {
 	dx, dy := to.X-from.X, to.Y-from.Y
 	adx, ady := abs(dx), abs(dy)
 
@@ -96,16 +96,16 @@ func (m *ClassicMode) validateGeometry(board *core.Board, piece core.Piece, from
 		// Рокировка (если король и ладья не ходили)
 		moved, _ := piece.Meta["moved"].(bool)
 		if !moved && dy == 0 && adx == 2 {
-			rook_X := 7
+			rookX := 7
 
 			if to.X < from.X {
-				rook_X = 0
+				rookX = 0
 			}
 
-			rook, ok := board.Grid[core.Pos{X: rook_X, Y: from.Y}]
+			rook, ok := board.Grid[core.Pos{X: rookX, Y: from.Y}]
 			rMoved, _ := rook.Meta["moved"].(bool)
 
-			if ok && rook.Type == "rook" && !rMoved && board.IsPathClear(from, core.Pos{X: rook_X, Y: from.Y}) {
+			if ok && rook.Type == "rook" && !rMoved && board.IsPathClear(from, core.Pos{X: rookX, Y: from.Y}) {
 				if !m.isKingInCheck(board, piece.Color) {
 					step := 1
 
@@ -123,7 +123,7 @@ func (m *ClassicMode) validateGeometry(board *core.Board, piece core.Piece, from
 	return errors.New("invalid piece geometry")
 }
 
-func (m *ClassicMode) findKing(board *core.Board, color core.Color) core.Pos {
+func (m *Mode) findKing(board *core.Board, color core.Color) core.Pos {
 	for pos, piece := range board.Grid {
 		if piece.Type == "king" && piece.Color == color {
 			return pos
@@ -132,7 +132,7 @@ func (m *ClassicMode) findKing(board *core.Board, color core.Color) core.Pos {
 	return core.Pos{X: -1, Y: -1}
 }
 
-func (m *ClassicMode) checkRawGeometry(b *core.Board, pc core.Piece, from, to core.Pos) bool {
+func (m *Mode) checkRawGeometry(b *core.Board, pc core.Piece, from, to core.Pos) bool {
 	dx, dy := to.X-from.X, to.Y-from.Y
 	adx, ady := abs(dx), abs(dy)
 
@@ -157,7 +157,7 @@ func (m *ClassicMode) checkRawGeometry(b *core.Board, pc core.Piece, from, to co
 	return false
 }
 
-func (m *ClassicMode) isKingInCheck(board *core.Board, color core.Color) bool {
+func (m *Mode) isKingInCheck(board *core.Board, color core.Color) bool {
 	kingPos := m.findKing(board, color)
 	if kingPos.X == -1 {
 		return false
@@ -179,7 +179,7 @@ func (m *ClassicMode) isKingInCheck(board *core.Board, color core.Color) bool {
 	return false
 }
 
-func (m *ClassicMode) isMoveSafe(board *core.Board, turn core.Color, from, to core.Pos) bool {
+func (m *Mode) isMoveSafe(board *core.Board, turn core.Color, from, to core.Pos) bool {
 	piece := board.Grid[from]
 	target, targetOk := board.Grid[to]
 
@@ -199,7 +199,7 @@ func (m *ClassicMode) isMoveSafe(board *core.Board, turn core.Color, from, to co
 	return !inCheck
 }
 
-func (m *ClassicMode) ValidateMove(board *core.Board, turn core.Color, from, to core.Pos) error {
+func (m *Mode) ValidateMove(board *core.Board, turn core.Color, from, to core.Pos) error {
 	if from.X < 0 || from.X >= board.Width || from.Y < 0 || from.Y >= board.Height {
 		return errors.New("out of bounds")
 	}
@@ -230,7 +230,7 @@ func (m *ClassicMode) ValidateMove(board *core.Board, turn core.Color, from, to 
 	return nil
 }
 
-func (m *ClassicMode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
+func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	piece := board.Grid[from]
 	targetOk := false
 	if _, ok := board.Grid[to]; ok {
@@ -275,7 +275,7 @@ func (m *ClassicMode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos)
 	board.History = append(board.History, core.MoveRecord{From: from, To: to, Piece: piece})
 }
 
-func (m *ClassicMode) CheckState(board *core.Board, turn core.Color) string {
+func (m *Mode) CheckState(board *core.Board, turn core.Color) string {
 	hasMoves := false
 	for from, piece := range board.Grid {
 		if piece.Color != turn {
