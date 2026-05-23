@@ -1,8 +1,6 @@
 package main
 
 import (
-	"chess-monolith/internal/users"
-	"chess-monolith/internal/ws"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,9 +12,7 @@ import (
 func TestPingRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	hub := ws.NewHub()
-	var userHandler *users.Handler = nil
-	router := SetupRouter(userHandler, hub, "test-secret")
+	router := SetupRouter()
 
 	w := httptest.NewRecorder()
 	req, err := http.NewRequest("GET", "/api/ping", nil)
