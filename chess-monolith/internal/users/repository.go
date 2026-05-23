@@ -2,7 +2,6 @@ package users
 
 import (
 	"errors"
-	"strings"
 
 	"gorm.io/gorm"
 )
@@ -24,9 +23,7 @@ func NewRepository(db *gorm.DB) Repository {
 func (r *repository) CreateUser(user *User) error {
 	// gorm.DB.Create генерирует INSERT INTO users ...
 	if err := r.db.Create(user).Error; err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) ||
-			strings.Contains(err.Error(), "UNIQUE constraint failed") ||
-			strings.Contains(err.Error(), "duplicate key") {
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
 			return ErrUserExists
 		}
 		return ErrDatabase
