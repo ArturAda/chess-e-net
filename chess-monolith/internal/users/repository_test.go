@@ -47,4 +47,18 @@ func TestRepository_UserLifecycle(t *testing.T) {
 		_, err := repo.GetUserByEmail("non-existent@mail.com")
 		assert.Error(t, err, "Должна возвращаться ошибка, если email не найден")
 	})
+
+	t.Run("Create Duplicate User", func(t *testing.T) {
+		// Пытаемся создать юзера с тем же email, что и в первом тесте
+		duplicateUser := &User{
+			Username:     "another_name",
+			Email:        "test@example.com",
+			PasswordHash: "some_hash",
+		}
+
+		err := repo.CreateUser(duplicateUser)
+
+		// Репозиторий должен перехватить gorm.ErrDuplicatedKey и вернуть ErrUserExists
+		assert.ErrorIs(t, err, ErrUserExists)
+	})
 }
