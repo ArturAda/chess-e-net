@@ -2,32 +2,33 @@ package main
 
 import (
 	"chess-monolith/internal/users"
+	"chess-monolith/internal/ws"
 	"log"
 	"os"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-func SetupRouter() *gin.Engine {
+func SetupRouter(userHandler *users.Handler, hub *ws.Hub, jwtSecret string) *gin.Engine {
 	router := gin.Default()
 
-	router.Use(func(c *gin.Context) {
-		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
-		c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-		c.Writer.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
-		if c.Request.Method == "OPTIONS" {
-			c.AbortWithStatus(204)
-			return
-		}
-		c.Next()
-	})
+	config := cors.DefaultConfig()
+
+	config.AllowAllOrigins = true // Для MVP сойдет, потом заменишь на конкретный домен
+	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
+	router.Use(cors.New(config))
 
 	router.GET("/api/ping", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok", "message": "pong"})
 	})
+
+	router.GET("/ws", ws.ServeWS(hub, jwtSecret))
+
+	userHandler.SetupRoutes(router)
 
 	return router
 }
@@ -52,13 +53,14 @@ func main() {
 	}
 	log.Println("Created users table")
 
+	hub := ws.NewHub()
+	go hub.Run()
+
 	userRepo := users.NewRepository(db)
 	userService := users.NewService(userRepo, jwtSecret)
 	userHandler := users.NewHandler(userService)
 
-	router := SetupRouter()
-
-	userHandler.SetupRoutes(router)
+	router := SetupRouter(userHandler, hub, jwtSecret)
 
 	log.Println("Starting server on port " + port)
 	if err := router.Run(":" + port); err != nil {
