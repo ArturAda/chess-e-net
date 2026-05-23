@@ -50,31 +50,23 @@ func TestClient_WritePump(t *testing.T) {
 	conn, _, err := dialer.Dial(wsURL, nil)
 	assert.NoError(t, err)
 	defer func(conn *websocket.Conn) {
-		err := conn.Close()
-		if err != nil {
-			return
-		}
+		_ = conn.Close()
 	}(conn)
 
 	time.Sleep(50 * time.Millisecond) // Ждем окончания регистрации
 
 	// Берем единственного зарегистрированного клиента из хаба
-	var serverSideClient *Client
-	for client := range hub.Clients {
-		serverSideClient = client
-		break
-	}
-	assert.NotNil(t, serverSideClient)
 
 	// Имитируем отправку сообщения сервером
 	testMsg := []byte(`{"type":"MOVE", "payload": "e2e4"}`)
-	serverSideClient.Send <- testMsg
+	hub.Broadcast <- testMsg
 
 	// На стороне клиента (нашего тестового соединения) читаем сообщение
 	err = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	if err != nil {
 		return
 	}
+
 	msgType, receivedMsg, err := conn.ReadMessage()
 
 	assert.NoError(t, err)
@@ -118,10 +110,7 @@ func TestWritePump_ChannelClosed(t *testing.T) {
 	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	assert.NoError(t, err)
 	defer func(conn *websocket.Conn) {
-		err := conn.Close()
-		if err != nil {
-			return
-		}
+		_ = conn.Close()
 	}(conn)
 
 	// Ждем, пока WritePump отработает
@@ -145,10 +134,7 @@ func TestClient_ReadPump_ValidJSON(t *testing.T) {
 	assert.NoError(t, err)
 
 	defer func(conn *websocket.Conn) {
-		err := conn.Close()
-		if err != nil {
-			return
-		}
+		_ = conn.Close()
 	}(conn)
 
 	time.Sleep(50 * time.Millisecond) // Ждем регистрацию
@@ -167,7 +153,7 @@ func TestClient_ReadPump_ValidJSON(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Проверяем, что соединение все еще живо и клиент не удален из-за ошибки
-	assert.Equal(t, 1, len(hub.Clients))
+	assert.Equal(t, 1, hub.Len())
 }
 
 func TestClient_ReadPump_InvalidJSON(t *testing.T) {
@@ -182,10 +168,7 @@ func TestClient_ReadPump_InvalidJSON(t *testing.T) {
 	assert.NoError(t, err)
 
 	defer func(conn *websocket.Conn) {
-		err := conn.Close()
-		if err != nil {
-
-		}
+		_ = conn.Close()
 	}(conn)
 
 	time.Sleep(50 * time.Millisecond) // Ждем регистрацию
@@ -198,7 +181,7 @@ func TestClient_ReadPump_InvalidJSON(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Проверяем, что соединение не упало, и клиент все еще в хабе
-	assert.Equal(t, 1, len(hub.Clients), "Client should remain connected after sending invalid JSON")
+	assert.Equal(t, 1, hub.Len(), "Client should remain connected after sending invalid JSON")
 }
 
 func TestClient_ReadPump_SocketError(t *testing.T) {
@@ -213,19 +196,18 @@ func TestClient_ReadPump_SocketError(t *testing.T) {
 	assert.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 1, len(hub.Clients))
+	assert.Equal(t, 1, hub.Len())
 
-	err = conn.UnderlyingConn().Close()
-	if err != nil {
-		return
-	}
+	conn.UnderlyingConn().Close()
 
 	time.Sleep(100 * time.Millisecond) // Ждем отработки defer
 
 	// Клиент должен быть удален
-	assert.Equal(t, 0, len(hub.Clients), "Client should be removed after hard disconnect")
+	assert.Equal(t, 0, hub.Len(), "Client should be removed after hard disconnect")
 }
 
+// Тип: Integration Test
+// Что проверяет: Автоматическое отключение клиента при закрытии соединения
 func TestClient_Disconnect(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
@@ -238,7 +220,7 @@ func TestClient_Disconnect(t *testing.T) {
 	assert.NoError(t, err)
 
 	time.Sleep(50 * time.Millisecond)
-	assert.Equal(t, 1, len(hub.Clients), "Client should be connected")
+	assert.Equal(t, 1, hub.Len(), "Client should be connected")
 
 	// Клиент разрывает соединение (закрыл вкладку)
 	conn.Close()
@@ -247,5 +229,5 @@ func TestClient_Disconnect(t *testing.T) {
 	// вызовет defer и отправит сигнал в Unregister
 	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, 0, len(hub.Clients), "Client should be removed after disconnect")
+	assert.Equal(t, 0, hub.Len(), "Client should be removed after disconnect")
 }

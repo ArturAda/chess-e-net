@@ -13,6 +13,9 @@ type Hub struct {
 
 	// Запросы на отключение
 	Unregister chan *Client
+
+	// Канал для безопасного запроса количества клиентов
+	lenReq chan chan int
 }
 
 func NewHub() *Hub {
@@ -21,6 +24,7 @@ func NewHub() *Hub {
 		Broadcast:  make(chan []byte),
 		Register:   make(chan *Client),
 		Unregister: make(chan *Client),
+		lenReq:     make(chan chan int),
 	}
 }
 
@@ -50,6 +54,15 @@ func (h *Hub) Run() {
 					delete(h.Clients, client)
 				}
 			}
+
+		case req := <-h.lenReq:
+			req <- len(h.Clients)
 		}
 	}
+}
+
+func (h *Hub) Len() int {
+	req := make(chan int)
+	h.lenReq <- req
+	return <-req
 }
