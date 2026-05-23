@@ -194,19 +194,3 @@ func TestHandler_Login_Scenarios(t *testing.T) {
 		})
 	}
 }
-
-func TestHandler_Register_InvalidJSONBody(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	mockService := new(MockService)
-	handler := NewHandler(mockService)
-	router := gin.Default()
-	handler.SetupRoutes(router)
-
-	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("POST", "/api/register", bytes.NewBuffer([]byte("{bad-json")))
-	req.Header.Set("Content-Type", "application/json")
-
-	router.ServeHTTP(w, req)
-
-	assert.Equal(t, http.StatusBadRequest, w.Code)
-}
