@@ -226,8 +226,6 @@ func TestClient_ReadPump_SocketError(t *testing.T) {
 	assert.Equal(t, 0, len(hub.Clients), "Client should be removed after hard disconnect")
 }
 
-// Тип: Integration Test
-// Что проверяет: Автоматическое отключение клиента при закрытии соединения
 func TestClient_Disconnect(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
