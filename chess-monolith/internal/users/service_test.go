@@ -28,6 +28,14 @@ func (m *MockRepository) GetUserByEmail(email string) (*User, error) {
 	return args.Get(0).(*User), args.Error(1)
 }
 
+func (m *MockRepository) GetUserByID(id uuid.UUID) (*User, error) {
+	args := m.Called(id)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*User), args.Error(1)
+}
+
 func TestService_Register_UserExists(t *testing.T) {
 	mockRepo := new(MockRepository)
 	service := NewService(mockRepo, "secret")

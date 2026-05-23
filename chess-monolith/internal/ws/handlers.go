@@ -2,11 +2,14 @@
 package ws
 
 import (
+	"chess-monolith/internal/users"
 	"log"
 	"net/http"
 
 	"chess-monolith/pkg/jwtutil" // Замените yourname!
+
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 )
 
@@ -19,7 +22,7 @@ var upgrader = websocket.Upgrader{
 }
 
 // ServeWS обрабатывает GET /ws запросы от браузера
-func ServeWS(hub *Hub, jwtSecret string) gin.HandlerFunc {
+func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		tokenString := c.Query("token")
 		if tokenString == "" {
@@ -31,6 +34,13 @@ func ServeWS(hub *Hub, jwtSecret string) gin.HandlerFunc {
 		if err != nil {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid token"})
 			return
+		}
+
+		parsedUUID, _ := uuid.Parse(userID)
+		user, err := userRepo.GetUserByID(parsedUUID) // Предполагаем, что такой метод есть в репозитории
+		rating := 1200                                // Дефолтное значение
+		if err == nil && user != nil {
+			rating = user.Rating
 		}
 
 		// Апгрейдим HTTP в WebSocket
@@ -45,6 +55,7 @@ func ServeWS(hub *Hub, jwtSecret string) gin.HandlerFunc {
 			Conn:   conn,
 			Send:   make(chan []byte, 256),
 			UserID: userID,
+			Rating: rating,
 		}
 
 		client.Hub.Register <- client

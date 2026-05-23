@@ -3,6 +3,7 @@ package users
 import (
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
@@ -46,6 +47,26 @@ func TestRepository_UserLifecycle(t *testing.T) {
 	t.Run("Get Non-existent User", func(t *testing.T) {
 		_, err := repo.GetUserByEmail("non-existent@mail.com")
 		assert.Error(t, err, "Должна возвращаться ошибка, если email не найден")
+	})
+
+	t.Run("Get Existing User by ID", func(t *testing.T) {
+		foundByEmail, err := repo.GetUserByEmail("test@example.com")
+		require.NoError(t, err)
+
+		foundByID, err := repo.GetUserByID(foundByEmail.ID)
+		require.NoError(t, err)
+
+		assert.Equal(t, foundByEmail.ID, foundByID.ID)
+		assert.Equal(t, foundByEmail.Username, foundByID.Username)
+		assert.Equal(t, foundByEmail.Email, foundByID.Email)
+	})
+
+	t.Run("Get Non-existent User by ID", func(t *testing.T) {
+		randomID := uuid.New()
+
+		_, err := repo.GetUserByID(randomID)
+
+		assert.ErrorIs(t, err, ErrUserNotFound)
 	})
 
 	t.Run("Create Duplicate User", func(t *testing.T) {
