@@ -22,6 +22,7 @@ type Client struct {
 	Conn   *websocket.Conn
 	Send   chan []byte
 	UserID string
+	Rating int
 }
 
 // WSMessage - универсальная структура для обмена JSON

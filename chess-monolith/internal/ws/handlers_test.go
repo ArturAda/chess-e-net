@@ -1,22 +1,35 @@
 package ws
 
 import (
+	"chess-monolith/internal/users"
 	"chess-monolith/pkg/jwtutil"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// DummyUserRepository - простая заглушка репозитория для тестов транспортного уровня
+type DummyUserRepository struct{}
+
+func (d *DummyUserRepository) CreateUser(_ *users.User) error               { return nil }
+func (d *DummyUserRepository) GetUserByEmail(_ string) (*users.User, error) { return nil, nil }
+func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
+	return nil, nil
+}
 
 func TestServeWS_NoToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.Default()
 
 	hub := NewHub()
-	router.GET("/ws", ServeWS(hub, "test_secret"))
+	dummyRepo := &DummyUserRepository{}
+
+	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret"))
 
 	w := httptest.NewRecorder()
 	// Делаем запрос без query параметра ?token=
@@ -34,7 +47,9 @@ func TestServeWS_InvalidToken(t *testing.T) {
 	router := gin.Default()
 
 	hub := NewHub()
-	router.GET("/ws", ServeWS(hub, "test_secret"))
+	dummyRepo := &DummyUserRepository{}
+
+	router.GET("/ws", ServeWS(hub, dummyRepo, "test_secret"))
 
 	w := httptest.NewRecorder()
 	req, _ := http.NewRequest("GET", "/ws?token=fake_invalid_token", nil)
@@ -49,8 +64,11 @@ func TestServeWS_InvalidToken(t *testing.T) {
 func TestServeWS_UpgradeError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.Default()
+
 	hub := NewHub()
-	router.GET("/ws", ServeWS(hub, "secret"))
+	dummyRepo := &DummyUserRepository{}
+
+	router.GET("/ws", ServeWS(hub, dummyRepo, "secret"))
 
 	validToken, err := jwtutil.GenerateToken("test_user_id", "secret")
 	require.NoError(t, err)
