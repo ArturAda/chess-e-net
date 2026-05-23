@@ -15,5 +15,20 @@ services:
       timeout: 5s
       retries: 5
 
+  migrator:
+    image: migrate/migrate:v4.16.2
+    container_name: chess_migrator
+    env_file:
+      - configs/.env
+    volumes:
+      - ./migrations:/migrations
+    command:
+      - -path=/migrations
+      - -database=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable
+      - up
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   pgdata:
