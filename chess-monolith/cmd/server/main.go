@@ -13,12 +13,12 @@ import (
 	"gorm.io/gorm"
 )
 
-func SetupRouter(userHandler *users.Handler, hub *ws.Hub, jwtSecret string) *gin.Engine {
+func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Repository, jwtSecret string) *gin.Engine {
 	router := gin.Default()
 
 	config := cors.DefaultConfig()
 
-	config.AllowAllOrigins = true // Для MVP сойдет, потом заменишь на конкретный домен
+	config.AllowAllOrigins = true // zДля MVP сойдет, потом заменишь на конкретный домен
 	config.AllowHeaders = []string{"Origin", "Content-Length", "Content-Type", "Authorization"}
 	router.Use(cors.New(config))
 
@@ -26,7 +26,7 @@ func SetupRouter(userHandler *users.Handler, hub *ws.Hub, jwtSecret string) *gin
 		c.JSON(200, gin.H{"status": "ok", "message": "pong"})
 	})
 
-	router.GET("/ws", ws.ServeWS(hub, jwtSecret))
+	router.GET("/ws", ws.ServeWS(hub, userRepo, jwtSecret))
 
 	userHandler.SetupRoutes(router)
 
@@ -60,7 +60,7 @@ func main() {
 	userService := users.NewService(userRepo, jwtSecret)
 	userHandler := users.NewHandler(userService)
 
-	router := SetupRouter(userHandler, hub, jwtSecret)
+	router := SetupRouter(userHandler, hub, userRepo, jwtSecret)
 
 	log.Println("Starting server on port " + port)
 	if err := router.Run(":" + port); err != nil {

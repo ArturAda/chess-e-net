@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -11,6 +12,7 @@ import (
 type Repository interface {
 	CreateUser(user *User) error
 	GetUserByEmail(email string) (*User, error)
+	GetUserByID(id uuid.UUID) (*User, error)
 }
 
 type repository struct {
@@ -46,5 +48,19 @@ func (r *repository) GetUserByEmail(email string) (*User, error) {
 		}
 		return nil, ErrDatabase
 	}
+	return &user, nil
+}
+
+func (r *repository) GetUserByID(id uuid.UUID) (*User, error) {
+	var user User
+	err := r.db.First(&user, "id = ?", id).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrUserNotFound
+		}
+		return nil, ErrDatabase
+	}
+
 	return &user, nil
 }

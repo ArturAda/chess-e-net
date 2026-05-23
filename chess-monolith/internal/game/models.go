@@ -12,9 +12,10 @@ type Game struct {
 	WhiteID uuid.UUID `gorm:"type:uuid;not null"`
 	BlackID uuid.UUID `gorm:"type:uuid;not null"`
 
-	Mode   string `gorm:"type:varchar(50);default:'classic'"`
-	Status string `gorm:"type:varchar(20);default:'active'"` // 'active', 'draw', 'white_won', 'black_won'
-	Turn   string `gorm:"type:varchar(10);default:'white'"`
+	Mode     string `gorm:"type:varchar(50);default:'classic'"`
+	IsRanked bool   `gorm:"default:false"`
+	Status   string `gorm:"type:varchar(20);default:'active'"` // 'active', 'draw', 'white_won', 'black_won'
+	Turn     string `gorm:"type:varchar(10);default:'white'"`
 
 	BoardState string `gorm:"type:text"` // История ходов и текущая расстановка фигур
 
