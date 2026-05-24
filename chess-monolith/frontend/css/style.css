@@ -295,22 +295,22 @@ h2 {
     display: inline-block;
     position: relative;
     margin: 0 0 clamp(18px, 3vh, 30px);
-    color: transparent;
+    color: #ffffff;
     font-size: clamp(3rem, 7.2vw, 6.5rem);
     letter-spacing: 0;
     line-height: 0.94;
-    background:
-        linear-gradient(90deg, #fff6d6 0%, #ffd2ba 24%, #f6aeca 50%, #d9ffe6 76%, #fff6d6 100%);
-    background-size: 240% 100%;
-    -webkit-background-clip: text;
-    background-clip: text;
+    background: transparent;
+    background-image: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    -webkit-text-fill-color: #ffffff;
     text-shadow:
-        0 1px 0 rgba(255,255,255,0.3),
-        0 0 9px rgba(255,199,143,0.34),
-        0 0 16px rgba(246,174,202,0.22),
+        0 1px 0 rgba(255,255,255,0.28),
+        0 0 10px rgba(255,245,218,0.34),
+        0 0 18px rgba(141,252,255,0.2),
         0 8px 0 rgba(50,28,24,0.18);
     -webkit-text-stroke: 1px rgba(255,252,232,0.5);
-    animation: title-glow-soft 5.8s ease-in-out infinite;
+    animation: none;
 }
 
 #page-menu .game-title {
@@ -326,15 +326,15 @@ body[data-background="dark-room"] .game-title {
     background-image: none;
     -webkit-background-clip: border-box;
     background-clip: border-box;
-    color: #c98cff;
-    -webkit-text-fill-color: #c98cff;
+    color: #ffffff;
+    -webkit-text-fill-color: #ffffff;
     text-shadow:
-        0 1px 0 rgba(237,255,182,0.52),
-        0 0 6px rgba(164,82,255,0.52),
-        0 0 12px rgba(97,255,74,0.34),
-        0 0 20px rgba(255,83,236,0.22),
+        0 1px 0 rgba(255,255,255,0.34),
+        0 0 7px rgba(255,255,255,0.26),
+        0 0 14px rgba(141,252,255,0.2),
+        0 0 22px rgba(202,255,139,0.14),
         0 8px 0 rgba(0,0,0,0.34);
-    -webkit-text-stroke: 1px rgba(202,255,139,0.42);
+    -webkit-text-stroke: 1px rgba(255,255,255,0.34);
     animation: none;
     filter: none;
     box-shadow: none;
