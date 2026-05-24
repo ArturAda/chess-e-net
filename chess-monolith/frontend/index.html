@@ -22,7 +22,7 @@
             <button class="img-btn-wrapper" onclick="navigateTo('page-classic')">
                 <img src="images/buttons/Classic_Button.png" class="menu-img color-shift" alt="Classic">
             </button>
-            <button class="img-btn-wrapper" onclick="navigateTo('page-wip')">
+            <button class="img-btn-wrapper" onclick="navigateTo('page-modern')">
                 <img src="images/buttons/Modern.png" class="menu-img" alt="Modern">
             </button>
             <button class="img-btn-wrapper" onclick="navigateTo('page-settings')">
@@ -30,6 +30,9 @@
             </button>
             <button class="img-btn-wrapper" onclick="navigateTo('page-wip')">
                 <img src="images/buttons/Rating.png" class="menu-img" alt="Rating">
+            </button>
+            <button class="img-btn-wrapper" onclick="navigateTo('page-history')">
+                <img src="images/buttons/History.png" class="menu-img" alt="History">
             </button>
         </div>
 
@@ -123,6 +126,11 @@
                 <p>RU: Открой Settings и выбери стиль для каждой фигуры отдельно или загрузи свой вариант через карточку с плюсом.</p>
                 <p>EN: Open Settings and choose a style for each piece separately, or upload your own variant through the plus card.</p>
             </div>
+            <button class="accordion-btn">Can my opponent see my custom textures?</button>
+            <div class="accordion-content">
+                <p>RU: Нет. Твои текстуры остаются твоей локальной визуальной настройкой, а другой игрок видит свои выбранные стили.</p>
+                <p>EN: No. Your textures stay as your local visual setup, while the other player sees their own selected styles.</p>
+            </div>
             <button class="accordion-btn">Where is the source code?</button>
             <div class="accordion-content">
                 <p>RU: Исходный код Go-монолита доступен по кнопке GitHub.</p>
@@ -174,16 +182,71 @@
         <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
     </div>
 
+    <div id="page-history" class="page">
+        <h2>History</h2>
+        <section class="history-panel">
+            <div class="history-filters" aria-label="History filters">
+                <label><input type="checkbox" data-history-sort="desc" checked> Newest</label>
+                <label><input type="checkbox" data-history-sort="asc"> Oldest</label>
+                <label><input type="checkbox" data-history-filter="win"> Wins</label>
+                <label><input type="checkbox" data-history-filter="loss"> Losses</label>
+                <label><input type="checkbox" data-history-filter="draw"> Draws</label>
+            </div>
+            <div id="history-list" class="history-list"></div>
+        </section>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-history-detail" class="page">
+        <h2 id="history-detail-title">Game Review</h2>
+        <section class="history-detail-layout">
+            <div id="history-analysis-board" class="history-analysis-board"></div>
+            <aside class="history-analysis-panel">
+                <div class="history-analytics">
+                    <div>
+                        <span>Accuracy</span>
+                        <strong id="history-accuracy">-</strong>
+                    </div>
+                    <div>
+                        <span>Result</span>
+                        <strong id="history-result">-</strong>
+                    </div>
+                    <div>
+                        <span>Opening</span>
+                        <strong id="history-opening">-</strong>
+                    </div>
+                </div>
+                <div id="history-move-list" class="history-move-list"></div>
+            </aside>
+        </section>
+        <button class="btn back-btn" onclick="navigateTo('page-history')">← Back</button>
+    </div>
+
+    <div id="page-modern" class="page">
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+        <div class="classic-setup">
+            <h2>Choose Modern Match</h2>
+            <h3>Board Size</h3>
+            <div class="board-size-buttons modern-board-size-buttons">
+                <button type="button" class="board-size-btn" data-modern-board-size="10">10×10</button>
+                <button type="button" class="board-size-btn" data-modern-board-size="12">12×12</button>
+                <button type="button" class="board-size-btn soon-mode-btn">Soon</button>
+            </div>
+            <h3>Time Control</h3>
+            <div class="time-control-buttons">
+                <button type="button" class="time-control-btn" data-modern-time-control="1">1 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="5">5 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="10">10 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="30">30 min</button>
+            </div>
+            <button id="modern-start-btn" class="mini-action-btn classic-start-btn" type="button" disabled>Find Match</button>
+        </div>
+    </div>
+
     <div id="page-classic" class="page">
-        <button class="btn back-btn" style="margin-bottom: 20px;" onclick="navigateTo('page-menu')">← Back</button>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
         <div id="classic-setup" class="classic-setup">
             <h2>Choose Classic Match</h2>
-            <h3>Board Size</h3>
-            <div class="board-size-buttons">
-                <button type="button" class="board-size-btn" data-board-size="8">8×8</button>
-                <button type="button" class="board-size-btn" data-board-size="10">10×10</button>
-                <button type="button" class="board-size-btn" data-board-size="12">12×12</button>
-            </div>
             <h3>Time Control</h3>
             <div class="time-control-buttons">
                 <button type="button" class="time-control-btn" data-time-control="1">1 min</button>
@@ -215,10 +278,17 @@
                 <span id="matchmaking-status" class="matchmaking-status"></span>
             </div>
             <div class="classic-game-layout">
-                <div id="myBoard" class="board-host"></div>
-                <aside class="emoji-chat" aria-label="Emoji chat">
-                    <div id="emoji-chat-log" class="emoji-chat-log" aria-live="polite"></div>
-                    <div id="emoji-chat-picker" class="emoji-chat-picker"></div>
+                <div class="board-column">
+                    <div id="opponent-captured" class="captured-tray captured-tray-top" aria-label="Opponent captures"></div>
+                    <div id="myBoard" class="board-host"></div>
+                    <div id="me-captured" class="captured-tray captured-tray-bottom" aria-label="Your captures"></div>
+                </div>
+                <aside class="game-side-panel">
+                    <div class="emoji-chat" aria-label="Emoji chat">
+                        <div id="emoji-chat-log" class="emoji-chat-log" aria-live="polite"></div>
+                        <div id="emoji-chat-picker" class="emoji-chat-picker"></div>
+                    </div>
+                    <section id="piece-legend" class="piece-legend" aria-label="Pieces"></section>
                 </aside>
             </div>
         </div>

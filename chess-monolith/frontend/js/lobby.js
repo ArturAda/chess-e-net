@@ -1,6 +1,7 @@
 const ASSET_ROOT = 'images';
 const PIECES_ROOT = `${ASSET_ROOT}/сhess_pieces`;
 const USER_STYLES_KEY = 'chessemag_user_styles';
+const USER_STYLES_VERSION = 2;
 const CURRENT_SETTINGS_KEY = 'chessemag_current_settings';
 const ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
 const ACCOUNT_AVATAR_SIZE = 256;
@@ -49,14 +50,31 @@ class BuiltInPieceStyleStrategy extends PieceAssetStrategy {
 }
 
 class UploadedPieceVariantStrategy extends PieceAssetStrategy {
-    constructor({ id, name, pieceType, whiteSrc, blackSrc }) {
+    constructor({ id, name, pieceType, role = 'light', whiteSrc, blackSrc, src }) {
         super({ id, name, pieceType });
-        this.whiteSrc = whiteSrc;
-        this.blackSrc = blackSrc;
+        this.role = role;
+        this.whiteSrc = whiteSrc || src || blackSrc;
+        this.blackSrc = blackSrc || src || whiteSrc;
     }
 
     getSrc(piece) {
         return piece[0] === 'w' ? this.whiteSrc : this.blackSrc;
+    }
+}
+
+class SinglePieceImageStrategy extends PieceAssetStrategy {
+    constructor({ baseStrategy, pieceType, sourceColor }) {
+        super({
+            id: `${baseStrategy.id}-${pieceType}-${sourceColor === 'w' ? 'light' : 'dark'}`,
+            name: `${baseStrategy.name} ${sourceColor === 'w' ? 'Light' : 'Dark'}`,
+            pieceType
+        });
+        this.baseStrategy = baseStrategy;
+        this.sourceColor = sourceColor;
+    }
+
+    getSrc() {
+        return this.baseStrategy.getSrc(`${this.sourceColor}${this.pieceType}`);
     }
 }
 
@@ -239,13 +257,28 @@ const emojiChatItems = [
     { id: 'rocket', name: 'Rocket mood', src: `${ASSET_ROOT}/smiles/rocket_mood.png` }
 ];
 
+const historyRecords = [];
+const LEGACY_HISTORY_STORAGE_KEYS = [
+    'chessemag_history',
+    'chessemagHistory',
+    'chessemag-game-history',
+    'historyRecords'
+];
+
 let board = null;
 let currentVisualBoardSize = null;
 let currentTimeControlMinutes = null;
+let currentGameMode = 'classic';
 let currentCustomPosition = null;
 let selectedCustomSquare = null;
 let selectedClassicBoardSize = null;
 let selectedClassicTimeMinutes = null;
+let selectedModernBoardSize = null;
+let selectedModernTimeMinutes = null;
+let capturedByMe = [];
+let capturedByOpponent = [];
+let historySortDirection = 'desc';
+let historyFilters = new Set();
 let timerState = null;
 let timerIntervalId = null;
 let matchNotFoundTimeoutId = null;
@@ -259,12 +292,16 @@ let accountPasswordVisible = false;
 let accountEditing = false;
 
 document.addEventListener('DOMContentLoaded', () => {
+    clearLocalHistoryRecords();
     normalizeSettings();
     bindClassicSetupControls();
+    bindModernSetupControls();
+    bindHistoryControls();
     bindAccountForm();
     renderAccountProfile();
     setAccountEntryVisibility('page-menu');
     applySelectedBoardSquares();
+    renderHistoryList();
 });
 
 window.addEventListener('resize', () => {
@@ -294,6 +331,14 @@ function navigateTo(pageId) {
         resetClassicEntry();
     }
 
+    if (pageId === 'page-modern') {
+        resetModernSetup();
+    }
+
+    if (pageId === 'page-history') {
+        renderHistoryList();
+    }
+
     if (pageId === 'page-settings') {
         renderSettingsGallery();
     }
@@ -320,13 +365,6 @@ function setAccountEntryVisibility(pageId) {
 }
 
 function bindClassicSetupControls() {
-    document.querySelectorAll('[data-board-size]').forEach(button => {
-        button.addEventListener('click', () => {
-            selectedClassicBoardSize = Number(button.dataset.boardSize);
-            renderClassicSetupSelection();
-        });
-    });
-
     document.querySelectorAll('[data-time-control]').forEach(button => {
         button.addEventListener('click', () => {
             selectedClassicTimeMinutes = Number(button.dataset.timeControl);
@@ -335,24 +373,65 @@ function bindClassicSetupControls() {
     });
 
     document.getElementById('classic-start-btn')?.addEventListener('click', () => {
-        if (!selectedClassicBoardSize || !selectedClassicTimeMinutes) return;
-        renderClassicBoard(selectedClassicBoardSize, selectedClassicTimeMinutes, true);
+        if (!selectedClassicTimeMinutes) return;
+        renderClassicBoard(8, selectedClassicTimeMinutes, true, true, 'classic');
+    });
+}
+
+function bindModernSetupControls() {
+    document.querySelectorAll('[data-modern-board-size]').forEach(button => {
+        button.addEventListener('click', () => {
+            selectedModernBoardSize = Number(button.dataset.modernBoardSize);
+            renderModernSetupSelection();
+        });
+    });
+
+    document.querySelectorAll('[data-modern-time-control]').forEach(button => {
+        button.addEventListener('click', () => {
+            selectedModernTimeMinutes = Number(button.dataset.modernTimeControl);
+            renderModernSetupSelection();
+        });
+    });
+
+    document.getElementById('modern-start-btn')?.addEventListener('click', () => {
+        if (!selectedModernBoardSize || !selectedModernTimeMinutes) return;
+        const boardSize = selectedModernBoardSize;
+        const timeControl = selectedModernTimeMinutes;
+        navigateTo('page-classic');
+        renderClassicBoard(boardSize, timeControl, true, true, 'modern');
     });
 }
 
 function renderClassicSetupSelection() {
-    document.querySelectorAll('[data-board-size]').forEach(button => {
-        button.classList.toggle('active', Number(button.dataset.boardSize) === selectedClassicBoardSize);
-    });
-
     document.querySelectorAll('[data-time-control]').forEach(button => {
         button.classList.toggle('active', Number(button.dataset.timeControl) === selectedClassicTimeMinutes);
     });
 
     const startButton = document.getElementById('classic-start-btn');
     if (startButton) {
-        startButton.disabled = !selectedClassicBoardSize || !selectedClassicTimeMinutes;
+        startButton.disabled = !selectedClassicTimeMinutes;
     }
+}
+
+function renderModernSetupSelection() {
+    document.querySelectorAll('[data-modern-board-size]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.modernBoardSize) === selectedModernBoardSize);
+    });
+
+    document.querySelectorAll('[data-modern-time-control]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.modernTimeControl) === selectedModernTimeMinutes);
+    });
+
+    const startButton = document.getElementById('modern-start-btn');
+    if (startButton) {
+        startButton.disabled = !selectedModernBoardSize || !selectedModernTimeMinutes;
+    }
+}
+
+function resetModernSetup() {
+    selectedModernBoardSize = null;
+    selectedModernTimeMinutes = null;
+    renderModernSetupSelection();
 }
 
 function resetClassicEntry() {
@@ -362,12 +441,16 @@ function resetClassicEntry() {
     hideMatchNotFoundOverlay();
     currentVisualBoardSize = null;
     currentTimeControlMinutes = null;
+    currentGameMode = 'classic';
     currentCustomPosition = null;
     selectedCustomSquare = null;
-    selectedClassicBoardSize = null;
+    selectedClassicBoardSize = 8;
     selectedClassicTimeMinutes = null;
+    capturedByMe = [];
+    capturedByOpponent = [];
     emojiMessages = [];
     renderClassicSetupSelection();
+    renderCapturedPieces();
     renderEmojiMessages();
     renderAllTimers(0, 0);
     setMatchmakingStatus('');
@@ -382,17 +465,22 @@ function resetClassicEntry() {
     }
 }
 
-function renderClassicBoard(size, timeControlMinutes, resetPosition = false, restartSession = true) {
+function renderClassicBoard(size, timeControlMinutes, resetPosition = false, restartSession = true, mode = currentGameMode) {
     const preservedClassicPosition = !resetPosition && size === 8 && board ? board.position() : null;
     destroyBoard();
     currentVisualBoardSize = size;
     currentTimeControlMinutes = timeControlMinutes;
+    currentGameMode = mode;
 
     if (restartSession) {
         stopGameTimer();
         ensureEmojiChat();
         resetEmojiChatSession();
-        startMatchmaking(size, timeControlMinutes);
+        capturedByMe = [];
+        capturedByOpponent = [];
+        renderCapturedPieces();
+        renderPieceLegend();
+        startMatchmaking(size, timeControlMinutes, mode);
         startGameTimer(timeControlMinutes);
     }
 
@@ -440,10 +528,10 @@ function destroyBoard() {
     }
 }
 
-function startMatchmaking(boardSize, timeControlMinutes) {
+function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode) {
     setMatchmakingStatus('Searching...');
-    matchmakingClient.findMatch({ mode: 'classic', boardSize, timeControlMinutes }).then(result => {
-        if (currentVisualBoardSize !== boardSize || currentTimeControlMinutes !== timeControlMinutes) return;
+    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes }).then(result => {
+        if (currentGameMode !== mode || currentVisualBoardSize !== boardSize || currentTimeControlMinutes !== timeControlMinutes) return;
         setMatchmakingStatus(result.message);
     });
 }
@@ -607,6 +695,171 @@ function sendEmojiMessage(item) {
         src: item.src
     });
     renderEmojiMessages();
+}
+
+function bindHistoryControls() {
+    document.querySelectorAll('[data-history-sort]').forEach(input => {
+        input.addEventListener('change', event => {
+            if (!event.currentTarget.checked) {
+                event.currentTarget.checked = true;
+                return;
+            }
+            historySortDirection = event.currentTarget.dataset.historySort;
+            document.querySelectorAll('[data-history-sort]').forEach(other => {
+                other.checked = other === event.currentTarget;
+            });
+            renderHistoryList();
+        });
+    });
+
+    document.querySelectorAll('[data-history-filter]').forEach(input => {
+        input.addEventListener('change', event => {
+            const result = event.currentTarget.dataset.historyFilter;
+            if (event.currentTarget.checked) {
+                historyFilters.add(result);
+            } else {
+                historyFilters.delete(result);
+            }
+            renderHistoryList();
+        });
+    });
+}
+
+function renderHistoryList() {
+    const list = document.getElementById('history-list');
+    if (!list) return;
+
+    const records = historyRecords
+        .filter(record => historyFilters.size === 0 || historyFilters.has(record.result))
+        .sort((a, b) => {
+            const diff = new Date(a.timestamp) - new Date(b.timestamp);
+            return historySortDirection === 'asc' ? diff : -diff;
+        });
+
+    list.innerHTML = '';
+    if (records.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = 'No games yet';
+        list.appendChild(empty);
+        return;
+    }
+
+    records.forEach(record => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = `history-game-card history-result-${record.result}`;
+        button.addEventListener('click', () => openHistoryGame(record.id));
+
+        const board = document.createElement('span');
+        board.className = 'history-card-board';
+        renderHistoryMiniBoard(board, record.boardSize);
+
+        const meta = document.createElement('span');
+        meta.className = 'history-card-meta';
+        meta.innerHTML = `
+            <strong>${resultLabel(record.result)} vs ${record.opponent}</strong>
+            <span>${record.boardSize}×${record.boardSize} · ${record.timeControl}</span>
+            <span>${formatHistoryDate(record.timestamp)}</span>
+        `;
+
+        button.append(board, meta);
+        list.appendChild(button);
+    });
+}
+
+function clearLocalHistoryRecords() {
+    try {
+        LEGACY_HISTORY_STORAGE_KEYS.forEach(key => localStorage.removeItem(key));
+    } catch (error) {
+        console.warn('Unable to clear local history records', error);
+    }
+}
+
+function openHistoryGame(recordId) {
+    const record = historyRecords.find(item => item.id === recordId) || historyRecords[0];
+    if (!record) return;
+
+    navigateTo('page-history-detail');
+    const title = document.getElementById('history-detail-title');
+    const accuracy = document.getElementById('history-accuracy');
+    const result = document.getElementById('history-result');
+    const opening = document.getElementById('history-opening');
+
+    if (title) title.textContent = `Game vs ${record.opponent}`;
+    if (accuracy) accuracy.textContent = record.accuracy;
+    if (result) result.textContent = resultLabel(record.result);
+    if (opening) opening.textContent = record.opening;
+
+    renderHistoryAnalysisBoard(record);
+    renderHistoryMoveList(record);
+}
+
+function renderHistoryMiniBoard(host, size) {
+    host.innerHTML = '';
+    for (let index = 0; index < 16; index += 1) {
+        const square = document.createElement('span');
+        square.className = (Math.floor(index / 4) + index) % 2 === 0 ? 'mini-light' : 'mini-dark';
+        host.appendChild(square);
+    }
+    host.dataset.size = `${size}×${size}`;
+}
+
+function renderHistoryAnalysisBoard(record) {
+    const host = document.getElementById('history-analysis-board');
+    if (!host) return;
+
+    host.innerHTML = '';
+    const position = buildVisualPosition(8);
+    const grid = document.createElement('div');
+    grid.className = 'history-board-grid';
+
+    for (let row = 0; row < 8; row += 1) {
+        for (let col = 0; col < 8; col += 1) {
+            const square = document.createElement('span');
+            const key = squareKey(row, col);
+            square.className = `history-board-square ${(row + col) % 2 === 0 ? 'mini-light' : 'mini-dark'}`;
+            const piece = position[key];
+            if (piece && (row < 2 || row > 5)) {
+                const img = document.createElement('img');
+                img.src = getPieceSrc(piece);
+                img.alt = '';
+                square.appendChild(img);
+            }
+            grid.appendChild(square);
+        }
+    }
+
+    host.dataset.meta = `${record.boardSize}×${record.boardSize}`;
+    host.appendChild(grid);
+}
+
+function renderHistoryMoveList(record) {
+    const list = document.getElementById('history-move-list');
+    if (!list) return;
+
+    list.innerHTML = '';
+    record.moves.forEach((move, index) => {
+        const row = document.createElement('div');
+        row.className = 'history-move-row';
+        row.innerHTML = `<span>${index + 1}</span><strong>${move}</strong>`;
+        list.appendChild(row);
+    });
+}
+
+function resultLabel(result) {
+    if (result === 'win') return 'Win';
+    if (result === 'loss') return 'Loss';
+    return 'Draw';
+}
+
+function formatHistoryDate(timestamp) {
+    return new Date(timestamp).toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
 }
 
 function renderEmojiMessages() {
@@ -864,10 +1117,63 @@ function pieceTheme(piece) {
     return getPieceSrc(piece);
 }
 
-function handleClassicDrop(source, target) {
+function handleClassicDrop(source, target, piece, newPosition, oldPosition) {
     if (!target || target === 'offboard' || source === target) return undefined;
+    trackCapture(piece, oldPosition?.[target]);
     handleLocalMoveComplete();
+    renderCapturedPieces();
     return undefined;
+}
+
+function trackCapture(movingPiece, capturedPiece) {
+    if (!movingPiece || !capturedPiece || movingPiece[0] === capturedPiece[0]) return;
+
+    if (capturedPiece[0] === 'b') {
+        capturedByMe.push(capturedPiece);
+    } else {
+        capturedByOpponent.push(capturedPiece);
+    }
+}
+
+function renderCapturedPieces() {
+    renderCapturedTray('me-captured', capturedByMe);
+    renderCapturedTray('opponent-captured', capturedByOpponent);
+}
+
+function renderCapturedTray(elementId, pieces) {
+    const tray = document.getElementById(elementId);
+    if (!tray) return;
+
+    tray.innerHTML = '';
+    pieces.slice(-12).forEach(piece => {
+        const img = document.createElement('img');
+        img.src = getPieceSrc(piece);
+        img.alt = '';
+        tray.appendChild(img);
+    });
+}
+
+function renderPieceLegend() {
+    const legend = document.getElementById('piece-legend');
+    if (!legend) return;
+
+    legend.innerHTML = '';
+    ['w', 'b'].forEach(color => {
+        PIECE_LABELS.forEach(piece => {
+            const item = document.createElement('div');
+            item.className = 'piece-legend-item';
+
+            const img = document.createElement('img');
+            img.src = getPieceSrc(`${color}${piece.code}`);
+            img.alt = '';
+
+            const label = document.createElement('span');
+            label.textContent = `- ${color === 'w' ? 'White' : 'Black'} ${piece.title}`;
+
+            item.append(img, label);
+            legend.appendChild(item);
+        });
+    });
 }
 
 function paintRenderedClassicSquares() {
@@ -890,13 +1196,16 @@ function paintRenderedClassicSquares() {
 }
 
 function getPieceSrc(piece) {
-    const strategyId = settings.pieceStrategyByType[piece[1]];
+    const strategyByType = piece[0] === 'w'
+        ? settings.lightPieceStrategyByType
+        : settings.darkPieceStrategyByType;
+    const strategyId = strategyByType[piece[1]];
     return getPieceStrategy(strategyId).getSrc(piece);
 }
 
 function refreshCurrentBoard(resetPosition = false) {
     if (!currentVisualBoardSize || !currentTimeControlMinutes) return;
-    renderClassicBoard(currentVisualBoardSize, currentTimeControlMinutes, resetPosition, false);
+    renderClassicBoard(currentVisualBoardSize, currentTimeControlMinutes, resetPosition, false, currentGameMode);
 }
 
 function renderCustomBoard(host, size, position) {
@@ -975,10 +1284,13 @@ function handleCustomDrop(event) {
     const to = event.currentTarget.dataset.square;
     if (!from || !to || from === to || !currentCustomPosition[from]) return;
 
-    currentCustomPosition[to] = currentCustomPosition[from];
+    const movingPiece = currentCustomPosition[from];
+    trackCapture(movingPiece, currentCustomPosition[to]);
+    currentCustomPosition[to] = movingPiece;
     delete currentCustomPosition[from];
     selectedCustomSquare = null;
     refreshCurrentBoard(false);
+    renderCapturedPieces();
     handleLocalMoveComplete();
 }
 
@@ -989,10 +1301,13 @@ function handleCustomSquareClick(event) {
     if (!target) return;
 
     if (selectedCustomSquare && selectedCustomSquare !== target && currentCustomPosition[selectedCustomSquare]) {
-        currentCustomPosition[target] = currentCustomPosition[selectedCustomSquare];
+        const movingPiece = currentCustomPosition[selectedCustomSquare];
+        trackCapture(movingPiece, currentCustomPosition[target]);
+        currentCustomPosition[target] = movingPiece;
         delete currentCustomPosition[selectedCustomSquare];
         selectedCustomSquare = null;
         refreshCurrentBoard(false);
+        renderCapturedPieces();
         handleLocalMoveComplete();
         return;
     }
@@ -1042,41 +1357,44 @@ function renderSettingsGallery() {
 }
 
 function createPieceSection(piece) {
-    const selectedStrategyId = settings.pieceStrategyByType[piece.code];
+    const lightStrategyId = settings.lightPieceStrategyByType[piece.code];
+    const darkStrategyId = settings.darkPieceStrategyByType[piece.code];
     const section = createAssetSection({
         title: piece.title,
-        iconSrc: getPieceStrategy(selectedStrategyId).getSrc(`w${piece.code}`)
+        iconSrc: getPieceStrategy(lightStrategyId).getSrc(`w${piece.code}`)
     });
     const options = section.querySelector('.asset-options');
 
     getPieceStrategiesForType(piece.code).forEach(strategy => {
-        options.appendChild(createPieceOption(piece.code, strategy, selectedStrategyId));
+        options.appendChild(createPieceOption(piece.code, strategy, lightStrategyId, darkStrategyId));
     });
     options.appendChild(createPieceUploadOption(piece));
 
     return section;
 }
 
-function createPieceOption(pieceType, strategy, selectedStrategyId) {
-    const option = document.createElement('button');
-    option.type = 'button';
-    option.className = `asset-option ${strategy.id === selectedStrategyId ? 'active' : ''}`;
-    option.addEventListener('click', () => selectPieceStrategy(pieceType, strategy.id));
+function createPieceOption(pieceType, strategy, lightStrategyId, darkStrategyId) {
+    const option = document.createElement('div');
+    const isActive = strategy.id === lightStrategyId || strategy.id === darkStrategyId;
+    option.className = `asset-option piece-option ${isActive ? 'active' : ''}`;
 
-    const pair = document.createElement('span');
-    pair.className = 'asset-piece-pair';
-    ['w', 'b'].forEach(color => {
-        const img = document.createElement('img');
-        img.src = strategy.getSrc(`${color}${pieceType}`);
-        img.alt = '';
-        pair.appendChild(img);
-    });
+    const preview = document.createElement('img');
+    preview.className = 'asset-piece-preview';
+    preview.src = strategy.getSrc(`w${pieceType}`);
+    preview.alt = '';
 
     const name = document.createElement('span');
     name.className = 'asset-option-name';
     name.textContent = strategy.name;
 
-    option.append(pair, name);
+    const controls = document.createElement('span');
+    controls.className = 'square-role-controls';
+    controls.append(
+        createAssetRoleControl('Light', strategy.id, lightStrategyId, () => selectPieceStrategy('light', pieceType, strategy.id)),
+        createAssetRoleControl('Dark', strategy.id, darkStrategyId, () => selectPieceStrategy('dark', pieceType, strategy.id))
+    );
+
+    option.append(preview, name, controls);
     return option;
 }
 
@@ -1093,19 +1411,27 @@ function createPieceUploadOption(piece) {
     nameInput.type = 'text';
     nameInput.placeholder = `${piece.title} variant name`;
 
+    const choices = document.createElement('span');
+    choices.className = 'piece-upload-actions';
+    choices.append(createPieceUploadButton(piece, nameInput));
+
+    wrapper.append(plus, nameInput, choices);
+    return wrapper;
+}
+
+function createPieceUploadButton(piece, nameInput) {
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.png,.jpg,.jpeg,.svg';
-    fileInput.multiple = true;
+    fileInput.accept = '.png,.jpg,.jpeg,.svg,.gif,image/png,image/jpeg,image/svg+xml,image/gif';
     fileInput.addEventListener('change', async event => {
-        const files = Array.from(event.target.files || []);
-        if (!files.length) return;
+        const [file] = Array.from(event.target.files || []);
+        if (!file) return;
 
         try {
-            const variant = await createUserPieceVariant(piece.code, files, nameInput.value.trim());
+            const variant = await createUserPieceVariant(piece.code, file, nameInput.value.trim());
             userStyles.pieceVariants.push(variant);
             persistUserStyles();
-            selectPieceStrategy(piece.code, variant.id);
+            renderSettingsGallery();
             showSettingsMessage(`Piece variant saved: ${variant.name}`);
         } catch (error) {
             showSettingsMessage(error.message);
@@ -1115,11 +1441,9 @@ function createPieceUploadOption(piece) {
     });
 
     const label = document.createElement('label');
-    label.className = 'inline-upload-btn';
-    label.append(plus, document.createTextNode(`Upload ${piece.title}`), fileInput);
-
-    wrapper.append(label, nameInput);
-    return wrapper;
+    label.className = 'inline-upload-btn piece-upload-btn';
+    label.append(document.createTextNode('Add Piece'), fileInput);
+    return label;
 }
 
 function createSquaresSection() {
@@ -1156,15 +1480,15 @@ function createSquareOption(strategy, lightId, darkId) {
     const controls = document.createElement('span');
     controls.className = 'square-role-controls';
     controls.append(
-        createSquareRoleControl('Light', strategy.id, lightId, () => selectSquareStrategy('light', strategy.id)),
-        createSquareRoleControl('Dark', strategy.id, darkId, () => selectSquareStrategy('dark', strategy.id))
+        createAssetRoleControl('Light', strategy.id, lightId, () => selectSquareStrategy('light', strategy.id)),
+        createAssetRoleControl('Dark', strategy.id, darkId, () => selectSquareStrategy('dark', strategy.id))
     );
 
     option.append(swatch, name, controls);
     return option;
 }
 
-function createSquareRoleControl(labelText, strategyId, selectedId, onSelect) {
+function createAssetRoleControl(labelText, strategyId, selectedId, onSelect) {
     const label = document.createElement('label');
     label.className = 'square-role-control';
 
@@ -1198,7 +1522,7 @@ function createSquareUploadOption() {
 
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.png,.jpg,.jpeg,.svg';
+    fileInput.accept = '.png,.jpg,.jpeg,.svg,.gif,image/png,image/jpeg,image/svg+xml,image/gif';
     fileInput.addEventListener('change', async event => {
         const [file] = Array.from(event.target.files || []);
         if (!file) return;
@@ -1256,13 +1580,38 @@ function createAssetSection({ title, iconSrc, squareSrc }) {
     return section;
 }
 
-function selectPieceStrategy(pieceType, strategyId) {
-    settings.pieceStrategyByType[pieceType] = strategyId;
+function selectPieceStrategy(kind, pieceType, strategyId) {
+    if (kind === 'light') {
+        settings.lightPieceStrategyByType[pieceType] = strategyId;
+        if (settings.darkPieceStrategyByType[pieceType] === strategyId) {
+            settings.darkPieceStrategyByType[pieceType] = fallbackPieceStrategyId(pieceType, 'dark', strategyId);
+        }
+    } else {
+        settings.darkPieceStrategyByType[pieceType] = strategyId;
+        if (settings.lightPieceStrategyByType[pieceType] === strategyId) {
+            settings.lightPieceStrategyByType[pieceType] = fallbackPieceStrategyId(pieceType, 'light', strategyId);
+        }
+    }
+
     saveCurrentSettings();
     if (settingsGalleryRendered) {
         renderSettingsGallery();
     }
     refreshCurrentBoard(false);
+    renderCapturedPieces();
+    renderPieceLegend();
+}
+
+function fallbackPieceStrategyId(pieceType, kind, avoidStrategyId) {
+    const defaultId = defaultPieceStrategyId(pieceType, kind);
+    if (defaultId !== avoidStrategyId) return defaultId;
+
+    const fallback = getPieceStrategiesForType(pieceType).find(strategy => strategy.id !== avoidStrategyId);
+    return fallback?.id || builtInPieceStrategies[0].id;
+}
+
+function defaultPieceStrategyId(pieceType, kind) {
+    return `${builtInPieceStrategies[0].id}-${pieceType}-${kind}`;
 }
 
 function selectSquareStrategy(kind, strategyId) {
@@ -1292,22 +1641,17 @@ function applySelectedBoardSquares() {
     paintRenderedClassicSquares();
 }
 
-async function createUserPieceVariant(pieceType, files, requestedName) {
-    const sources = await Promise.all(files.slice(0, 2).map(readFileAsDataUrl));
-    let whiteSrc = sources[0];
-    let blackSrc = sources[1] || sources[0];
-
-    const whiteFile = files.find(file => /white|light|_w|(^|[-_])w[-_]?/i.test(file.name));
-    const blackFile = files.find(file => /black|dark|_b|(^|[-_])b[-_]?/i.test(file.name));
-    if (whiteFile) whiteSrc = await readFileAsDataUrl(whiteFile);
-    if (blackFile) blackSrc = await readFileAsDataUrl(blackFile);
+async function createUserPieceVariant(pieceType, file, requestedName) {
+    const src = await readFileAsDataUrl(file);
+    const fileName = file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ').trim();
 
     return {
         id: createUserId(`piece-${pieceType.toLowerCase()}`),
-        name: requestedName || `Custom ${PIECE_NAMES[pieceType]}`,
+        name: requestedName || fileName || `Custom ${PIECE_NAMES[pieceType]}`,
         pieceType,
-        whiteSrc,
-        blackSrc
+        src,
+        whiteSrc: src,
+        blackSrc: src
     };
 }
 
@@ -1360,7 +1704,7 @@ function loadImage(src) {
 
 function getAllPieceStrategies() {
     return [
-        ...builtInPieceStrategies,
+        ...getBuiltInSinglePieceStrategies(),
         ...userStyles.pieceVariants.map(variant => new UploadedPieceVariantStrategy(variant))
     ];
 }
@@ -1370,7 +1714,18 @@ function getPieceStrategiesForType(pieceType) {
 }
 
 function getPieceStrategy(strategyId) {
-    return getAllPieceStrategies().find(strategy => strategy.id === strategyId) || builtInPieceStrategies[0];
+    return getAllPieceStrategies().find(strategy => strategy.id === strategyId)
+        || builtInPieceStrategies.find(strategy => strategy.id === strategyId)
+        || getBuiltInSinglePieceStrategies()[0];
+}
+
+function getBuiltInSinglePieceStrategies() {
+    return builtInPieceStrategies.flatMap(strategy => (
+        PIECE_TYPES.flatMap(pieceType => [
+            new SinglePieceImageStrategy({ baseStrategy: strategy, pieceType, sourceColor: 'w' }),
+            new SinglePieceImageStrategy({ baseStrategy: strategy, pieceType, sourceColor: 'b' })
+        ])
+    ));
 }
 
 function getAllSquareStrategies() {
@@ -1387,17 +1742,40 @@ function getSquareStrategy(strategyId) {
 function loadUserStyles() {
     try {
         const parsed = JSON.parse(localStorage.getItem(USER_STYLES_KEY));
-        return normalizeUserStyles(parsed);
+        const normalized = normalizeUserStyles(parsed);
+        if (parsed?.version !== USER_STYLES_VERSION) {
+            localStorage.setItem(USER_STYLES_KEY, JSON.stringify(normalized));
+        }
+        return normalized;
     } catch {
         return normalizeUserStyles();
     }
 }
 
 function normalizeUserStyles(parsed = {}) {
+    const shouldResetPieceVariants = parsed.version !== USER_STYLES_VERSION;
+
     return {
-        pieceVariants: Array.isArray(parsed.pieceVariants) ? parsed.pieceVariants : migrateOldPieceVariants(parsed.pieces),
+        version: USER_STYLES_VERSION,
+        pieceVariants: shouldResetPieceVariants
+            ? []
+            : normalizeSinglePieceVariants(Array.isArray(parsed.pieceVariants) ? parsed.pieceVariants : migrateOldPieceVariants(parsed.pieces)),
         squareVariants: Array.isArray(parsed.squareVariants) ? parsed.squareVariants : migrateOldSquareVariants(parsed.boards)
     };
+}
+
+function normalizeSinglePieceVariants(variants) {
+    return variants.map(variant => {
+        const src = variant.src || variant.whiteSrc || variant.blackSrc;
+        const role = variant.role || (/(^|\s|[-_])dark($|\s|[-_])|black|(^|[-_])b[-_]?/i.test(variant.name || '') ? 'dark' : 'light');
+        return {
+            ...variant,
+            role,
+            src,
+            whiteSrc: src,
+            blackSrc: src
+        };
+    }).filter(variant => variant.src);
 }
 
 function migrateOldPieceVariants(oldPieces) {
@@ -1456,13 +1834,17 @@ function loadCurrentSettings() {
         if (!parsed) return defaults;
 
         const migratedPieceStyle = parsed.pieceStyleId || 'classic';
-        const pieceStrategyByType = { ...defaults.pieceStrategyByType };
+        const lightPieceStrategyByType = { ...defaults.lightPieceStrategyByType };
+        const darkPieceStrategyByType = { ...defaults.darkPieceStrategyByType };
         PIECE_TYPES.forEach(type => {
-            pieceStrategyByType[type] = parsed.pieceStrategyByType?.[type] || parsed.pieceStyleByType?.[type] || migratedPieceStyle;
+            const legacyStrategyId = parsed.pieceStrategyByType?.[type] || parsed.pieceStyleByType?.[type] || migratedPieceStyle;
+            lightPieceStrategyByType[type] = normalizeLoadedPieceStrategyId(parsed.lightPieceStrategyByType?.[type] || legacyStrategyId, type, 'light');
+            darkPieceStrategyByType[type] = normalizeLoadedPieceStrategyId(parsed.darkPieceStrategyByType?.[type] || legacyStrategyId, type, 'dark');
         });
 
         return {
-            pieceStrategyByType,
+            lightPieceStrategyByType,
+            darkPieceStrategyByType,
             lightSquareStrategyId: parsed.lightSquareStrategyId || parsed.lightSquareStyleId || parsed.boardStyleId || defaults.lightSquareStrategyId,
             darkSquareStrategyId: parsed.darkSquareStrategyId || parsed.darkSquareStyleId || parsed.boardStyleId || defaults.darkSquareStrategyId
         };
@@ -1471,10 +1853,21 @@ function loadCurrentSettings() {
     }
 }
 
+function normalizeLoadedPieceStrategyId(strategyId, pieceType, kind) {
+    if (builtInPieceStrategies.some(strategy => strategy.id === strategyId)) {
+        return `${strategyId}-${pieceType}-${kind}`;
+    }
+    return strategyId || defaultPieceStrategyId(pieceType, kind);
+}
+
 function defaultSettings() {
     return {
-        pieceStrategyByType: PIECE_TYPES.reduce((result, type) => {
-            result[type] = builtInPieceStrategies[0].id;
+        lightPieceStrategyByType: PIECE_TYPES.reduce((result, type) => {
+            result[type] = defaultPieceStrategyId(type, 'light');
+            return result;
+        }, {}),
+        darkPieceStrategyByType: PIECE_TYPES.reduce((result, type) => {
+            result[type] = defaultPieceStrategyId(type, 'dark');
             return result;
         }, {}),
         lightSquareStrategyId: 'yellow-square',
@@ -1485,10 +1878,21 @@ function defaultSettings() {
 function normalizeSettings() {
     const pieceIds = getAllPieceStrategies().map(strategy => strategy.id);
     const squareIds = getAllSquareStrategies().map(strategy => strategy.id);
+    settings.lightPieceStrategyByType ||= {};
+    settings.darkPieceStrategyByType ||= {};
 
     PIECE_TYPES.forEach(type => {
-        if (!pieceIds.includes(settings.pieceStrategyByType[type])) {
-            settings.pieceStrategyByType[type] = builtInPieceStrategies[0].id;
+        settings.lightPieceStrategyByType[type] = normalizeLoadedPieceStrategyId(settings.lightPieceStrategyByType[type], type, 'light');
+        settings.darkPieceStrategyByType[type] = normalizeLoadedPieceStrategyId(settings.darkPieceStrategyByType[type], type, 'dark');
+
+        if (!pieceIds.includes(settings.lightPieceStrategyByType[type])) {
+            settings.lightPieceStrategyByType[type] = defaultPieceStrategyId(type, 'light');
+        }
+        if (!pieceIds.includes(settings.darkPieceStrategyByType[type])) {
+            settings.darkPieceStrategyByType[type] = defaultPieceStrategyId(type, 'dark');
+        }
+        if (settings.lightPieceStrategyByType[type] === settings.darkPieceStrategyByType[type]) {
+            settings.darkPieceStrategyByType[type] = fallbackPieceStrategyId(type, 'dark', settings.lightPieceStrategyByType[type]);
         }
     });
 
