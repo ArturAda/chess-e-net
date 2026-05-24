@@ -116,6 +116,22 @@ class UploadedSquareStrategy extends SquareAssetStrategy {
     }
 }
 
+class BackgroundStrategy {
+    constructor({ id, name, previewClass }) {
+        this.id = id;
+        this.name = name;
+        this.previewClass = previewClass;
+    }
+
+    getPreviewClass() {
+        return this.previewClass;
+    }
+
+    apply() {
+        document.body.dataset.background = this.id;
+    }
+}
+
 class MatchmakingStrategy {
     findMatch() {
         throw new Error('MatchmakingStrategy#findMatch must be implemented.');
@@ -241,7 +257,24 @@ const builtInSquareStrategies = [
 
 const AMBIENT_SQUARE_IDS = ['yellow-square', 'classic-green-square', 'green-square', 'default-red-square'];
 let ambientResizeTimeoutId = null;
+let viewportResizeTimeoutId = null;
 let ambientPieceIntervalId = null;
+let ambientPieceTimeoutIds = [];
+let ambientGridSignature = '';
+const preloadedAssetImages = new Map();
+
+const backgroundStrategies = [
+    new BackgroundStrategy({
+        id: 'cozy-board',
+        name: 'Cozy Board',
+        previewClass: 'background-preview-cozy'
+    }),
+    new BackgroundStrategy({
+        id: 'dark-room',
+        name: 'Dark Room',
+        previewClass: 'background-preview-dark'
+    })
+];
 
 const emojiChatItems = [
     { id: 'shark', name: 'Shark grin', src: `${ASSET_ROOT}/smiles/shark_grin.png` },
@@ -305,12 +338,15 @@ document.addEventListener('DOMContentLoaded', () => {
     renderAccountProfile();
     setAccountEntryVisibility('page-menu');
     setPageScrollMode('page-menu');
+    applySelectedBackground();
     applySelectedBoardSquares();
     initAmbientBackground();
+    warmSettingsAssetCache();
     renderHistoryList();
 });
 
 window.addEventListener('resize', () => {
+    markViewportResizing();
     if (!board) return;
     board.resize();
     paintRenderedClassicSquares();
@@ -347,6 +383,7 @@ function navigateTo(pageId) {
     }
 
     if (pageId === 'page-settings') {
+        warmSettingsAssetCache();
         renderSettingsGallery();
     }
 
@@ -373,18 +410,27 @@ function setAccountEntryVisibility(pageId) {
 
 function setPageScrollMode(pageId) {
     document.body.classList.toggle('no-page-scroll', pageId === 'page-menu' || pageId === 'page-settings');
+    document.body.classList.toggle('settings-page-active', pageId === 'page-settings');
+    applyFallingPiecesPreference();
+}
+
+function markViewportResizing() {
+    document.body.classList.add('viewport-resizing');
+    window.clearTimeout(viewportResizeTimeoutId);
+    viewportResizeTimeoutId = window.setTimeout(() => {
+        document.body.classList.remove('viewport-resizing');
+    }, 180);
 }
 
 function initAmbientBackground() {
     renderAmbientBoardLayer();
     window.addEventListener('resize', () => {
+        markViewportResizing();
         window.clearTimeout(ambientResizeTimeoutId);
         ambientResizeTimeoutId = window.setTimeout(renderAmbientBoardLayer, 120);
     });
 
-    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        startFallingPieces();
-    }
+    applyFallingPiecesPreference();
 }
 
 function renderAmbientBoardLayer() {
@@ -392,14 +438,17 @@ function renderAmbientBoardLayer() {
     if (!layer) return;
 
     const tileSize = window.innerWidth < 760 ? 72 : 96;
-    const columns = Math.ceil(window.innerWidth / tileSize) + 8;
-    const rows = Math.ceil(window.innerHeight / tileSize) + 8;
+    const columns = Math.ceil(window.innerWidth / tileSize) + 10;
+    const rows = Math.ceil(window.innerHeight / tileSize) + 10;
     const total = columns * rows;
+    const signature = `${tileSize}:${columns}:${rows}`;
+    if (ambientGridSignature === signature && layer.childElementCount === total) return;
+
     const squareStrategies = AMBIENT_SQUARE_IDS.map(id => getSquareStrategy(id));
+    const fragment = document.createDocumentFragment();
 
     layer.style.setProperty('--ambient-square-size', `${tileSize}px`);
     layer.style.gridTemplateColumns = `repeat(${columns}, var(--ambient-square-size))`;
-    layer.innerHTML = '';
 
     for (let index = 0; index < total; index += 1) {
         const row = Math.floor(index / columns);
@@ -409,8 +458,11 @@ function renderAmbientBoardLayer() {
         square.className = 'ambient-square';
         square.style.backgroundColor = strategy.getColor();
         square.style.backgroundImage = `url("${strategy.getSrc()}")`;
-        layer.appendChild(square);
+        fragment.appendChild(square);
     }
+
+    layer.replaceChildren(fragment);
+    ambientGridSignature = signature;
 }
 
 function startFallingPieces() {
@@ -418,12 +470,36 @@ function startFallingPieces() {
     if (!layer || ambientPieceIntervalId) return;
 
     for (let index = 0; index < 7; index += 1) {
-        window.setTimeout(() => spawnFallingPiece(layer), index * 360);
+        const timeoutId = window.setTimeout(() => spawnFallingPiece(layer), index * 360);
+        ambientPieceTimeoutIds.push(timeoutId);
     }
     ambientPieceIntervalId = window.setInterval(() => spawnFallingPiece(layer), 850);
 }
 
+function stopFallingPieces() {
+    ambientPieceTimeoutIds.forEach(timeoutId => window.clearTimeout(timeoutId));
+    ambientPieceTimeoutIds = [];
+    window.clearInterval(ambientPieceIntervalId);
+    ambientPieceIntervalId = null;
+    const layer = document.getElementById('falling-pieces-layer');
+    if (layer) {
+        layer.innerHTML = '';
+    }
+}
+
+function applyFallingPiecesPreference() {
+    const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const isSettingsPage = document.body.classList.contains('settings-page-active');
+    if (settings.fallingPiecesEnabled && !reduceMotion && !isSettingsPage) {
+        startFallingPieces();
+        return;
+    }
+    stopFallingPieces();
+}
+
 function spawnFallingPiece(layer) {
+    if (!settings.fallingPiecesEnabled) return;
+    if (document.body.classList.contains('settings-page-active')) return;
     if (layer.childElementCount > 24) return;
 
     const pieceColor = Math.random() > 0.45 ? 'w' : 'b';
@@ -1432,6 +1508,7 @@ function renderSettingsGallery() {
         gallery.appendChild(createPieceSection(piece));
     });
     gallery.appendChild(createSquaresSection());
+    gallery.appendChild(createBackgroundSection());
     settingsGalleryRendered = true;
 }
 
@@ -1459,8 +1536,7 @@ function createPieceOption(pieceType, strategy, lightStrategyId, darkStrategyId)
 
     const preview = document.createElement('img');
     preview.className = 'asset-piece-preview';
-    preview.src = strategy.getSrc(`w${pieceType}`);
-    preview.alt = '';
+    configurePreviewImage(preview, strategy.getSrc(`w${pieceType}`));
 
     const name = document.createElement('span');
     name.className = 'asset-option-name';
@@ -1510,6 +1586,7 @@ function createPieceUploadButton(piece, nameInput) {
             const variant = await createUserPieceVariant(piece.code, file, nameInput.value.trim());
             userStyles.pieceVariants.push(variant);
             persistUserStyles();
+            warmSettingsAssetCache();
             renderSettingsGallery();
             showSettingsMessage(`Piece variant saved: ${variant.name}`);
         } catch (error) {
@@ -1541,6 +1618,77 @@ function createSquaresSection() {
     options.appendChild(createSquareUploadOption());
 
     return section;
+}
+
+function createBackgroundSection() {
+    const section = createAssetSection({
+        title: 'Background',
+        backgroundPreviewClass: getBackgroundStrategy(settings.backgroundStrategyId).getPreviewClass()
+    });
+    const options = section.querySelector('.asset-options');
+    options.classList.add('background-options');
+
+    backgroundStrategies.forEach(strategy => {
+        options.appendChild(createBackgroundOption(strategy));
+    });
+    options.appendChild(createFallingPiecesOption());
+
+    return section;
+}
+
+function createBackgroundOption(strategy) {
+    const option = document.createElement('div');
+    const isActive = strategy.id === settings.backgroundStrategyId;
+    option.className = `asset-option background-option ${isActive ? 'active' : ''}`;
+
+    const preview = document.createElement('span');
+    preview.className = `background-preview ${strategy.getPreviewClass()}`;
+
+    const name = document.createElement('span');
+    name.className = 'asset-option-name';
+    name.textContent = strategy.name;
+
+    const controls = document.createElement('span');
+    controls.className = 'square-role-controls single-role-controls';
+    controls.append(createAssetRoleControl('Use', strategy.id, settings.backgroundStrategyId, () => selectBackgroundStrategy(strategy.id)));
+
+    option.append(preview, name, controls);
+    return option;
+}
+
+function createFallingPiecesOption() {
+    const option = document.createElement('div');
+    option.className = `asset-option falling-pieces-option ${settings.fallingPiecesEnabled ? 'active' : ''}`;
+
+    const preview = document.createElement('span');
+    preview.className = 'falling-pieces-preview';
+
+    ['wP', 'bN', 'wK'].forEach(piece => {
+        const img = document.createElement('img');
+        configurePreviewImage(img, getPieceSrc(piece));
+        preview.appendChild(img);
+    });
+
+    const name = document.createElement('span');
+    name.className = 'asset-option-name';
+    name.textContent = 'Falling Pieces';
+
+    const label = document.createElement('label');
+    label.className = 'square-role-control';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = settings.fallingPiecesEnabled;
+    checkbox.addEventListener('change', event => {
+        selectFallingPiecesEnabled(event.currentTarget.checked);
+    });
+    label.append(checkbox, document.createTextNode('Enabled'));
+
+    const controls = document.createElement('span');
+    controls.className = 'square-role-controls single-role-controls';
+    controls.append(label);
+
+    option.append(preview, name, controls);
+    return option;
 }
 
 function createSquareOption(strategy, lightId, darkId) {
@@ -1610,6 +1758,7 @@ function createSquareUploadOption() {
             const variant = await createUserSquareVariant(file, nameInput.value.trim());
             userStyles.squareVariants.push(variant);
             persistUserStyles();
+            warmSettingsAssetCache();
             selectSquareStrategy('light', variant.id);
             showSettingsMessage(`Square variant saved: ${variant.name}`);
         } catch (error) {
@@ -1627,7 +1776,7 @@ function createSquareUploadOption() {
     return wrapper;
 }
 
-function createAssetSection({ title, iconSrc, squareSrc }) {
+function createAssetSection({ title, iconSrc, squareSrc, backgroundPreviewClass }) {
     const section = document.createElement('section');
     section.className = 'asset-section';
 
@@ -1637,8 +1786,11 @@ function createAssetSection({ title, iconSrc, squareSrc }) {
     if (iconSrc) {
         const icon = document.createElement('img');
         icon.className = 'asset-icon';
-        icon.src = iconSrc;
-        icon.alt = '';
+        configurePreviewImage(icon, iconSrc);
+        header.appendChild(icon);
+    } else if (backgroundPreviewClass) {
+        const icon = document.createElement('span');
+        icon.className = `asset-icon background-preview ${backgroundPreviewClass}`;
         header.appendChild(icon);
     } else {
         const icon = document.createElement('span');
@@ -1657,6 +1809,44 @@ function createAssetSection({ title, iconSrc, squareSrc }) {
     header.appendChild(heading);
     section.append(header, options);
     return section;
+}
+
+function warmSettingsAssetCache() {
+    const urls = new Set();
+
+    getAllPieceStrategies().forEach(strategy => {
+        PIECE_TYPES.forEach(type => {
+            urls.add(strategy.getSrc(`w${type}`));
+            urls.add(strategy.getSrc(`b${type}`));
+        });
+    });
+
+    getAllSquareStrategies().forEach(strategy => {
+        urls.add(strategy.getSrc());
+    });
+
+    urls.forEach(preloadAssetUrl);
+}
+
+function preloadAssetUrl(src) {
+    if (!src || preloadedAssetImages.has(src)) return;
+
+    const image = new Image();
+    image.loading = 'eager';
+    image.decoding = 'sync';
+    image.fetchPriority = 'high';
+    preloadedAssetImages.set(src, image);
+    image.src = src;
+    image.decode?.().catch(() => {});
+}
+
+function configurePreviewImage(image, src) {
+    image.alt = '';
+    image.loading = 'eager';
+    image.decoding = 'sync';
+    image.fetchPriority = 'high';
+    preloadAssetUrl(src);
+    image.src = src;
 }
 
 function selectPieceStrategy(kind, pieceType, strategyId) {
@@ -1706,6 +1896,28 @@ function selectSquareStrategy(kind, strategyId) {
         renderSettingsGallery();
     }
     refreshCurrentBoard(false);
+}
+
+function selectBackgroundStrategy(strategyId) {
+    settings.backgroundStrategyId = strategyId;
+    saveCurrentSettings();
+    applySelectedBackground();
+    if (settingsGalleryRendered) {
+        renderSettingsGallery();
+    }
+}
+
+function selectFallingPiecesEnabled(enabled) {
+    settings.fallingPiecesEnabled = enabled;
+    saveCurrentSettings();
+    applyFallingPiecesPreference();
+    if (settingsGalleryRendered) {
+        renderSettingsGallery();
+    }
+}
+
+function applySelectedBackground() {
+    getBackgroundStrategy(settings.backgroundStrategyId).apply();
 }
 
 function applySelectedBoardSquares() {
@@ -1818,6 +2030,10 @@ function getSquareStrategy(strategyId) {
     return getAllSquareStrategies().find(strategy => strategy.id === strategyId) || builtInSquareStrategies[0];
 }
 
+function getBackgroundStrategy(strategyId) {
+    return backgroundStrategies.find(strategy => strategy.id === strategyId) || backgroundStrategies[0];
+}
+
 function loadUserStyles() {
     try {
         const parsed = JSON.parse(localStorage.getItem(USER_STYLES_KEY));
@@ -1925,7 +2141,9 @@ function loadCurrentSettings() {
             lightPieceStrategyByType,
             darkPieceStrategyByType,
             lightSquareStrategyId: parsed.lightSquareStrategyId || parsed.lightSquareStyleId || parsed.boardStyleId || defaults.lightSquareStrategyId,
-            darkSquareStrategyId: parsed.darkSquareStrategyId || parsed.darkSquareStyleId || parsed.boardStyleId || defaults.darkSquareStrategyId
+            darkSquareStrategyId: parsed.darkSquareStrategyId || parsed.darkSquareStyleId || parsed.boardStyleId || defaults.darkSquareStrategyId,
+            backgroundStrategyId: parsed.backgroundStrategyId || defaults.backgroundStrategyId,
+            fallingPiecesEnabled: typeof parsed.fallingPiecesEnabled === 'boolean' ? parsed.fallingPiecesEnabled : defaults.fallingPiecesEnabled
         };
     } catch {
         return defaults;
@@ -1950,13 +2168,16 @@ function defaultSettings() {
             return result;
         }, {}),
         lightSquareStrategyId: 'yellow-square',
-        darkSquareStrategyId: 'classic-green-square'
+        darkSquareStrategyId: 'classic-green-square',
+        backgroundStrategyId: 'cozy-board',
+        fallingPiecesEnabled: true
     };
 }
 
 function normalizeSettings() {
     const pieceIds = getAllPieceStrategies().map(strategy => strategy.id);
     const squareIds = getAllSquareStrategies().map(strategy => strategy.id);
+    const backgroundIds = backgroundStrategies.map(strategy => strategy.id);
     settings.lightPieceStrategyByType ||= {};
     settings.darkPieceStrategyByType ||= {};
 
@@ -1981,6 +2202,14 @@ function normalizeSettings() {
 
     if (!squareIds.includes(settings.darkSquareStrategyId)) {
         settings.darkSquareStrategyId = 'classic-green-square';
+    }
+
+    if (!backgroundIds.includes(settings.backgroundStrategyId)) {
+        settings.backgroundStrategyId = 'cozy-board';
+    }
+
+    if (typeof settings.fallingPiecesEnabled !== 'boolean') {
+        settings.fallingPiecesEnabled = true;
     }
 
     saveCurrentSettings();
