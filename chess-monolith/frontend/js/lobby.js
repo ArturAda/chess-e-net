@@ -239,6 +239,10 @@ const builtInSquareStrategies = [
     })
 ];
 
+const AMBIENT_SQUARE_IDS = ['yellow-square', 'classic-green-square', 'green-square', 'default-red-square'];
+let ambientResizeTimeoutId = null;
+let ambientPieceIntervalId = null;
+
 const emojiChatItems = [
     { id: 'shark', name: 'Shark grin', src: `${ASSET_ROOT}/smiles/shark_grin.png` },
     { id: 'bite', name: 'Lip bite', src: `${ASSET_ROOT}/smiles/lip_bite.png` },
@@ -300,7 +304,9 @@ document.addEventListener('DOMContentLoaded', () => {
     bindAccountForm();
     renderAccountProfile();
     setAccountEntryVisibility('page-menu');
+    setPageScrollMode('page-menu');
     applySelectedBoardSquares();
+    initAmbientBackground();
     renderHistoryList();
 });
 
@@ -326,6 +332,7 @@ function navigateTo(pageId) {
     }
 
     setAccountEntryVisibility(pageId);
+    setPageScrollMode(pageId);
 
     if (pageId === 'page-classic') {
         resetClassicEntry();
@@ -362,6 +369,78 @@ accordions.forEach(btn => {
 
 function setAccountEntryVisibility(pageId) {
     document.getElementById('account-chip')?.classList.toggle('hidden', pageId !== 'page-menu');
+}
+
+function setPageScrollMode(pageId) {
+    document.body.classList.toggle('no-page-scroll', pageId === 'page-menu' || pageId === 'page-settings');
+}
+
+function initAmbientBackground() {
+    renderAmbientBoardLayer();
+    window.addEventListener('resize', () => {
+        window.clearTimeout(ambientResizeTimeoutId);
+        ambientResizeTimeoutId = window.setTimeout(renderAmbientBoardLayer, 120);
+    });
+
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        startFallingPieces();
+    }
+}
+
+function renderAmbientBoardLayer() {
+    const layer = document.getElementById('ambient-board-layer');
+    if (!layer) return;
+
+    const tileSize = window.innerWidth < 760 ? 72 : 96;
+    const columns = Math.ceil(window.innerWidth / tileSize) + 8;
+    const rows = Math.ceil(window.innerHeight / tileSize) + 8;
+    const total = columns * rows;
+    const squareStrategies = AMBIENT_SQUARE_IDS.map(id => getSquareStrategy(id));
+
+    layer.style.setProperty('--ambient-square-size', `${tileSize}px`);
+    layer.style.gridTemplateColumns = `repeat(${columns}, var(--ambient-square-size))`;
+    layer.innerHTML = '';
+
+    for (let index = 0; index < total; index += 1) {
+        const row = Math.floor(index / columns);
+        const col = index % columns;
+        const strategy = squareStrategies[(row + col * 2) % squareStrategies.length];
+        const square = document.createElement('span');
+        square.className = 'ambient-square';
+        square.style.backgroundColor = strategy.getColor();
+        square.style.backgroundImage = `url("${strategy.getSrc()}")`;
+        layer.appendChild(square);
+    }
+}
+
+function startFallingPieces() {
+    const layer = document.getElementById('falling-pieces-layer');
+    if (!layer || ambientPieceIntervalId) return;
+
+    for (let index = 0; index < 7; index += 1) {
+        window.setTimeout(() => spawnFallingPiece(layer), index * 360);
+    }
+    ambientPieceIntervalId = window.setInterval(() => spawnFallingPiece(layer), 850);
+}
+
+function spawnFallingPiece(layer) {
+    if (layer.childElementCount > 24) return;
+
+    const pieceColor = Math.random() > 0.45 ? 'w' : 'b';
+    const pieceType = PIECE_TYPES[Math.floor(Math.random() * PIECE_TYPES.length)];
+    const piece = document.createElement('img');
+    piece.className = 'falling-piece';
+    piece.src = getPieceSrc(`${pieceColor}${pieceType}`);
+    piece.alt = '';
+    piece.style.setProperty('--fall-size', `${Math.round(42 + Math.random() * 42)}px`);
+    piece.style.setProperty('--fall-x', `${Math.round(Math.random() * 100)}vw`);
+    piece.style.setProperty('--fall-drift', `${Math.round(-80 + Math.random() * 160)}px`);
+    piece.style.setProperty('--fall-duration', `${Math.round(13 + Math.random() * 11)}s`);
+    piece.style.setProperty('--fall-opacity', `${(0.34 + Math.random() * 0.24).toFixed(2)}`);
+    piece.style.setProperty('--fall-rotate-start', `${Math.round(-24 + Math.random() * 48)}deg`);
+    piece.style.setProperty('--fall-rotate-end', `${Math.round(160 + Math.random() * 220)}deg`);
+    piece.addEventListener('animationend', () => piece.remove());
+    layer.appendChild(piece);
 }
 
 function bindClassicSetupControls() {

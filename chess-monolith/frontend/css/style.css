@@ -26,10 +26,16 @@ body {
     color: #ecf0f1;
     font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
     background:
-        radial-gradient(circle at 18% 16%, rgba(76, 249, 255, 0.48), transparent 30%),
-        radial-gradient(circle at 82% 10%, rgba(255, 103, 223, 0.36), transparent 32%),
-        radial-gradient(circle at 50% 94%, rgba(154, 255, 194, 0.32), transparent 36%),
-        #13284a;
+        radial-gradient(circle at 18% 16%, rgba(255, 226, 151, 0.38), transparent 30%),
+        radial-gradient(circle at 82% 12%, rgba(109, 188, 144, 0.34), transparent 34%),
+        radial-gradient(circle at 50% 94%, rgba(156, 119, 219, 0.24), transparent 38%),
+        linear-gradient(135deg, #24192a, #2f4b3a 48%, #6a4a28);
+    background-size: 150% 150%;
+    animation: cozy-background-shift 18s ease-in-out infinite alternate;
+}
+
+body.no-page-scroll {
+    overflow-y: hidden;
 }
 
 body::before,
@@ -43,24 +49,102 @@ body::after {
 
 body::before {
     background:
-        linear-gradient(115deg, transparent 0 34%, rgba(0,238,255,0.44) 35%, transparent 37%),
-        linear-gradient(65deg, transparent 0 42%, rgba(255,82,220,0.34) 43%, transparent 45%),
-        linear-gradient(160deg, transparent 0 56%, rgba(210,255,99,0.24) 57%, transparent 59%),
-        linear-gradient(135deg, rgba(0,255,170,0.24), transparent 38%, rgba(135,95,255,0.3));
-    transform: translate3d(-1.5%, -1%, 0) rotate(-4deg);
-    animation: neon-lines 28s ease-in-out infinite alternate;
+        linear-gradient(115deg, transparent 0 36%, rgba(255,231,170,0.28) 37%, transparent 39%),
+        linear-gradient(65deg, transparent 0 44%, rgba(116,216,157,0.22) 45%, transparent 47%),
+        linear-gradient(160deg, transparent 0 58%, rgba(255,145,116,0.16) 59%, transparent 61%),
+        linear-gradient(135deg, rgba(255,214,132,0.14), transparent 42%, rgba(105,192,156,0.2));
+    opacity: 0.9;
+    transform: translate3d(-1%, -1%, 0) rotate(-4deg);
+    animation: cozy-light-sweep 30s ease-in-out infinite alternate;
 }
 
 body::after {
     background:
-        linear-gradient(90deg, transparent, rgba(255,255,255,0.13), transparent),
-        repeating-linear-gradient(180deg, transparent 0 13px, rgba(255,255,255,0.055) 14px, transparent 15px);
-    opacity: 0.48;
+        linear-gradient(90deg, transparent, rgba(255,246,218,0.1), transparent),
+        repeating-linear-gradient(180deg, transparent 0 13px, rgba(255,255,255,0.035) 14px, transparent 15px);
+    opacity: 0.42;
 }
 
-@keyframes neon-lines {
-    from { transform: translate3d(-1.5%, -1%, 0) rotate(-4deg); }
-    to { transform: translate3d(1.5%, 1%, 0) rotate(-4deg); }
+@keyframes cozy-background-shift {
+    from { background-position: 0% 28%; }
+    to { background-position: 100% 72%; }
+}
+
+@keyframes cozy-light-sweep {
+    from { transform: translate3d(-1%, -1%, 0) rotate(-4deg); }
+    to { transform: translate3d(1.4%, 1%, 0) rotate(-4deg); }
+}
+
+.ambient-board-layer,
+.falling-pieces-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+}
+
+.ambient-board-layer {
+    inset: -22vh -18vw;
+    display: grid;
+    grid-auto-rows: var(--ambient-square-size, 96px);
+    opacity: 0.23;
+    filter: saturate(1.15) brightness(0.95);
+    mix-blend-mode: soft-light;
+    transform: rotate(-5deg) scale(1.28);
+    animation: ambient-board-float 28s ease-in-out infinite alternate;
+}
+
+.ambient-board-layer::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background:
+        radial-gradient(circle at 0 0, rgba(242,207,118,0.22), transparent 34%),
+        linear-gradient(135deg, rgba(115,183,101,0.16), transparent 42%);
+}
+
+.ambient-square {
+    width: var(--ambient-square-size, 96px);
+    height: var(--ambient-square-size, 96px);
+    background-size: cover;
+    background-position: center;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.08);
+}
+
+.falling-pieces-layer {
+    z-index: 0;
+}
+
+.falling-piece {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: var(--fall-size, 56px);
+    height: var(--fall-size, 56px);
+    object-fit: contain;
+    opacity: 0;
+    filter: drop-shadow(0 8px 10px rgba(0,0,0,0.26));
+    animation: piece-fall var(--fall-duration, 18s) linear forwards;
+}
+
+@keyframes ambient-board-float {
+    from { transform: translate3d(-1.2%, -0.8%, 0) rotate(-5deg) scale(1.28); }
+    to { transform: translate3d(1.2%, 0.8%, 0) rotate(-5deg) scale(1.28); }
+}
+
+@keyframes piece-fall {
+    0% {
+        opacity: 0;
+        transform: translate3d(var(--fall-x), -18vh, 0) rotate(var(--fall-rotate-start));
+    }
+    10%, 88% {
+        opacity: var(--fall-opacity, 0.58);
+    }
+    100% {
+        opacity: 0;
+        transform: translate3d(calc(var(--fall-x) + var(--fall-drift)), 112vh, 0) rotate(var(--fall-rotate-end));
+    }
 }
 
 .page {
@@ -79,6 +163,30 @@ body::after {
 #page-classic,
 #page-modern {
     width: min(1500px, 100%);
+}
+
+#page-menu {
+    width: min(1540px, 100%);
+}
+
+#page-menu.active {
+    display: grid;
+    height: calc(100dvh - var(--page-pad) - var(--page-pad));
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    align-content: start;
+    justify-items: center;
+    overflow: hidden;
+}
+
+#page-settings.active {
+    display: grid;
+    width: min(1240px, 100%);
+    height: calc(100dvh - var(--page-pad) - var(--page-pad));
+    min-height: 0;
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
+    align-content: stretch;
+    overflow: hidden;
 }
 
 #page-classic.active,
@@ -128,6 +236,10 @@ h2 {
     animation: title-neon 4.5s ease-in-out infinite;
 }
 
+#page-menu .game-title {
+    margin-bottom: 0;
+}
+
 .game-title::after {
     content: attr(data-text);
     position: absolute;
@@ -145,11 +257,11 @@ h2 {
 
 .account-chip {
     position: fixed;
-    top: 12px;
-    right: 12px;
+    top: 14px;
+    right: 14px;
     z-index: 3;
-    width: clamp(76px, 9vw, 112px);
-    height: clamp(76px, 9vw, 112px);
+    width: clamp(124px, 12vw, 180px);
+    height: clamp(124px, 12vw, 180px);
     padding: 0;
     border: 0;
     background: transparent;
@@ -208,19 +320,22 @@ h2 {
 }
 
 .main-buttons {
-    margin-bottom: clamp(10px, 2vh, 16px);
+    margin-bottom: 0;
     flex-wrap: nowrap;
-    gap: clamp(10px, 1.4vw, 18px);
+    gap: clamp(8px, 1vw, 16px);
+    align-self: center;
 }
 
 .footer-buttons {
-    gap: clamp(18px, 3vw, 34px);
+    gap: clamp(36px, 4.2vw, 64px);
+    margin-top: clamp(24px, 3.2vh, 38px);
+    transform: translateY(-14px);
 }
 
 .divider {
     width: min(80%, 760px);
     height: 1px;
-    margin: clamp(16px, 3vh, 28px) auto;
+    margin: 0 auto;
     border: 0;
     background-image: linear-gradient(to right, transparent, rgba(141,252,255,0.56), transparent);
 }
@@ -268,14 +383,14 @@ h2 {
 }
 
 .menu-img {
-    width: clamp(124px, 15.6vw, 178px);
+    width: clamp(188px, 18.4vw, 270px);
     filter:
         drop-shadow(0 0 18px rgba(141,252,255,0.52))
         drop-shadow(4px 5px 0 rgba(0,0,0,0.34));
 }
 
 .menu-img-small {
-    width: clamp(132px, 14.8vw, 178px);
+    width: clamp(198px, 18vw, 270px);
     filter:
         drop-shadow(0 0 18px rgba(255,119,223,0.46))
         drop-shadow(3px 4px 0 rgba(0,0,0,0.34));
@@ -398,7 +513,8 @@ h2 {
 .settings-gallery {
     display: grid;
     gap: 24px;
-    max-height: min(66vh, 760px);
+    min-height: 0;
+    max-height: none;
     overflow: auto;
     padding: 4px 8px 10px;
 }
@@ -624,9 +740,14 @@ h2 {
 
 .settings-message {
     min-height: 20px;
-    margin-top: 12px;
+    margin: 8px 0 0;
     color: #f7dc6f;
     font-size: 14px;
+}
+
+#page-settings > .back-btn {
+    justify-self: center;
+    margin-top: 10px;
 }
 
 .account-panel {
@@ -1190,12 +1311,12 @@ body > .piece-417db {
 
 .classic-timers {
     position: fixed;
-    top: -2px;
-    right: clamp(6px, 1.25vw, 18px);
+    top: -22px;
+    right: clamp(10px, 1.6vw, 24px);
     z-index: 2;
     display: grid;
-    grid-template-columns: repeat(2, clamp(126px, 13.3vw, 174px));
-    gap: clamp(9px, 1.45vw, 18px);
+    grid-template-columns: repeat(2, clamp(162px, 15.4vw, 224px));
+    gap: clamp(24px, 3.2vw, 52px);
     pointer-events: none;
 }
 
@@ -1203,6 +1324,10 @@ body > .piece-417db {
     position: relative;
     aspect-ratio: 1;
     filter: drop-shadow(0 10px 18px rgba(0,0,0,0.34));
+}
+
+#opponent-timer {
+    transform: translateX(clamp(-20px, -1.2vw, -8px));
 }
 
 .timer-frame,
@@ -1246,7 +1371,7 @@ body > .piece-417db {
     z-index: 3;
     width: 76%;
     color: #fff9d6;
-    font-size: clamp(10px, 1.08vw, 15px);
+    font-size: clamp(12px, 1.28vw, 18px);
     font-weight: 900;
     line-height: 1;
     text-align: center;
@@ -1268,14 +1393,14 @@ body > .piece-417db {
 }
 
 .timer-digit {
-    width: clamp(13px, 1.65vw, 21px);
-    height: clamp(23px, 2.5vw, 33px);
+    width: clamp(16px, 2vw, 26px);
+    height: clamp(28px, 3vw, 41px);
     object-fit: contain;
 }
 
 .timer-colon-spacer {
     display: block;
-    flex: 0 0 clamp(8px, 1.08vw, 14px);
+    flex: 0 0 clamp(10px, 1.28vw, 18px);
     height: 1px;
 }
 
@@ -1600,6 +1725,22 @@ body > .piece-417db {
         --classic-board-size: min(46vw, calc(100dvh - 228px), 560px);
     }
 
+    #page-menu.active {
+        grid-template-rows: auto minmax(0, 1fr) auto auto;
+    }
+
+    .main-buttons {
+        gap: clamp(8px, 1vw, 12px);
+    }
+
+    .menu-img {
+        width: clamp(154px, 17.2vw, 202px);
+    }
+
+    .menu-img-small {
+        width: clamp(162px, 17vw, 206px);
+    }
+
     .classic-game-layout {
         grid-template-columns: var(--classic-board-size) minmax(470px, 520px);
         gap: 12px;
@@ -1675,12 +1816,26 @@ body > .piece-417db {
         gap: 12px;
     }
 
+    #page-menu.active {
+        grid-template-rows: auto minmax(0, 1fr) auto auto;
+    }
+
+    .account-chip {
+        width: clamp(92px, 24vw, 124px);
+        height: clamp(92px, 24vw, 124px);
+    }
+
+    .footer-buttons {
+        margin-top: clamp(16px, 3vh, 26px);
+        transform: translateY(-8px);
+    }
+
     .menu-img {
-        width: clamp(118px, 36vw, 160px);
+        width: clamp(146px, 39vw, 190px);
     }
 
     .menu-img-small {
-        width: clamp(126px, 34vw, 166px);
+        width: clamp(150px, 37vw, 196px);
     }
 
     .upload-grid,
@@ -1690,10 +1845,14 @@ body > .piece-417db {
     }
 
     .classic-timers {
-        grid-template-columns: repeat(2, 118px);
-        gap: 7px;
-        top: -2px;
-        right: 8px;
+        grid-template-columns: repeat(2, 142px);
+        gap: 12px;
+        top: -14px;
+        right: 6px;
+    }
+
+    #opponent-timer {
+        transform: translateX(-6px);
     }
 
     .classic-toolbar,
