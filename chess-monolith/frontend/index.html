@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en, ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chess-E-Net</title>
+    <meta name="description" content="Legendary Chess Game">
+    <link rel="icon" type="image/png" href="images/title/Chess_Title.png">
+    <link rel="stylesheet" href="css/chessboard-1.0.0.min.css">
+    <link rel="stylesheet" href="css/style.css">
+</head>
+
+<body class="no-page-scroll">
+
+    <div id="ambient-board-layer" class="ambient-board-layer" aria-hidden="true"></div>
+    <div id="falling-pieces-layer" class="falling-pieces-layer" aria-hidden="true"></div>
+
+    <button id="account-chip" class="account-chip" type="button" onclick="navigateTo('page-account')" aria-label="Account">
+        <img src="images/buttons/Account.png" class="account-chip-img" alt="Account">
+    </button>
+
+    <div id="page-menu" class="page active">
+        <h1 class="game-title" data-text="Chess-E-Net">Chess-E-Net</h1>
+        <div class="main-buttons">
+            <button class="img-btn-wrapper" onclick="navigateTo('page-classic')">
+                <img src="images/buttons/Classic_Button.png" class="menu-img color-shift" alt="Classic">
+            </button>
+            <button class="img-btn-wrapper" onclick="navigateTo('page-modern')">
+                <img src="images/buttons/Modern.png" class="menu-img" alt="Modern">
+            </button>
+            <button class="img-btn-wrapper" onclick="navigateTo('page-settings')">
+                <img src="images/buttons/Settings.png" class="menu-img" alt="Settings">
+            </button>
+            <button class="img-btn-wrapper" onclick="navigateTo('page-wip')">
+                <img src="images/buttons/Rating.png" class="menu-img" alt="Rating">
+            </button>
+            <button class="img-btn-wrapper" onclick="navigateTo('page-history')">
+                <img src="images/buttons/History.png" class="menu-img" alt="History">
+            </button>
+        </div>
+
+        <hr class="divider">
+
+        <div class="footer-buttons">
+            <button class="img-btn-wrapper shake-btn" onclick="window.open('https://github.com/ArturAda/chess-e-net', '_blank')">
+                <img src="images/buttons/GitHub.png" class="menu-img-small" alt="GitHub">
+            </button>
+            <button class="img-btn-wrapper shake-btn" onclick="navigateTo('page-about')">
+                <img src="images/buttons/Authors.png" class="menu-img-small" alt="Authors">
+            </button>
+            <button class="img-btn-wrapper shake-btn" onclick="navigateTo('page-faq')">
+                <img src="images/buttons/Questions.png" class="menu-img-small" alt="Questions">
+            </button>
+        </div>
+    </div>
+
+    <div id="page-wip" class="page">
+        <h2>Sorry, but we are still working on this</h2>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-account" class="page">
+        <h2>Account</h2>
+        <section id="account-auth-panel" class="account-panel account-auth-panel">
+            <form id="account-login-form" class="account-form account-login-form hidden">
+                <h3>Login</h3>
+                <label>
+                    Username
+                    <input id="account-login-username" type="text" maxlength="18" placeholder="CheesePlayer" autocomplete="username">
+                </label>
+                <label>
+                    Password
+                    <input id="account-login-password" type="password" maxlength="40" placeholder="Password" autocomplete="current-password">
+                </label>
+                <button class="mini-action-btn" type="submit">Login</button>
+            </form>
+            <form id="account-form" class="account-form">
+                <h3 id="account-form-title">Register</h3>
+                <label>
+                    Username
+                    <input id="account-username" type="text" maxlength="18" placeholder="CheesePlayer" autocomplete="nickname" required>
+                </label>
+                <label>
+                    Email
+                    <input id="account-email" type="email" placeholder="player@example.com" autocomplete="email">
+                </label>
+                <label>
+                    Password
+                    <input id="account-password" type="password" maxlength="40" placeholder="Password" autocomplete="new-password" required>
+                </label>
+                <button id="account-submit-btn" class="mini-action-btn" type="submit">Register</button>
+            </form>
+        </section>
+        <section id="account-profile-panel" class="account-profile hidden">
+            <div class="account-profile-avatar">
+                <img id="account-profile-avatar" alt="">
+                <span id="account-profile-avatar-fallback">?</span>
+            </div>
+            <label class="account-avatar-upload profile-avatar-upload">
+                Change Profile Image
+                <input id="account-profile-avatar-input" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+            </label>
+            <div class="account-profile-data">
+                <div class="account-profile-row">
+                    <span>Name</span>
+                    <strong id="account-profile-name"></strong>
+                </div>
+                <button id="account-password-toggle" class="account-profile-row account-password-row" type="button">
+                    <span>Password</span>
+                    <strong id="account-profile-password"></strong>
+                </button>
+                <div class="account-profile-row">
+                    <span>Rating</span>
+                    <strong id="account-profile-rating">-</strong>
+                </div>
+            </div>
+            <button id="account-edit-btn" class="mini-action-btn" type="button">Edit Profile</button>
+            <button id="account-logout-btn" class="mini-action-btn account-logout-btn" type="button">Log Out</button>
+        </section>
+        <p id="account-message" class="settings-message" aria-live="polite"></p>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-faq" class="page">
+        <h2>FAQ</h2>
+        <div class="accordion">
+            <button class="accordion-btn">How do I change piece graphics?</button>
+            <div class="accordion-content">
+                <p>RU: Открой Settings и выбери стиль для каждой фигуры отдельно или загрузи свой вариант через карточку с плюсом.</p>
+                <p>EN: Open Settings and choose a style for each piece separately, or upload your own variant through the plus card.</p>
+            </div>
+            <button class="accordion-btn">Can my opponent see my custom textures?</button>
+            <div class="accordion-content">
+                <p>RU: Нет. Твои текстуры остаются твоей локальной визуальной настройкой, а другой игрок видит свои выбранные стили.</p>
+                <p>EN: No. Your textures stay as your local visual setup, while the other player sees their own selected styles.</p>
+            </div>
+            <button class="accordion-btn">Where is the source code?</button>
+            <div class="accordion-content">
+                <p>RU: Исходный код Go-монолита доступен по кнопке GitHub.</p>
+                <p>EN: The Go monolith source code is available through the GitHub button.</p>
+            </div>
+            <button class="accordion-btn">Why are the pieces cheese?</button>
+            <div class="accordion-content">
+                <p>RU: Потому что обычные шахматы уже слишком серьезные, а сырные фигуры сразу повышают настроение на 64 клетки.</p>
+                <p>EN: Because regular chess is already serious enough, and cheese pieces make all 64 squares happier.</p>
+            </div>
+            <button class="accordion-btn">Can I blame the board after a bad move?</button>
+            <div class="accordion-content">
+                <p>RU: Можно, но доска все запомнит и в следующий раз поставит коня туда, где особенно больно.</p>
+                <p>EN: You can, but the board will remember and place a knight exactly where it hurts next time.</p>
+            </div>
+            <button class="accordion-btn">Why does the shark emoji look so confident?</button>
+            <div class="accordion-content">
+                <p>RU: Он просто знает мат в один ход, но из вежливости отправляет только стикер.</p>
+                <p>EN: It knows mate in one, but politely sends a sticker instead.</p>
+            </div>
+            <button class="accordion-btn">Do cheese pieces get nervous near the mouse style?</button>
+            <div class="accordion-content">
+                <p>RU: Да, особенно пешки. Они и так идут только вперед, а тут еще психологическое давление.</p>
+                <p>EN: Yes, especially pawns. They already only move forward, and now there is emotional pressure too.</p>
+            </div>
+            <button class="accordion-btn">Is losing with a clown sticker allowed?</button>
+            <div class="accordion-content">
+                <p>RU: Да. Это называется стратегическое принятие реальности с визуальным сопровождением.</p>
+                <p>EN: Yes. That is called strategic acceptance of reality with visual support.</p>
+            </div>
+        </div>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-about" class="page">
+        <h2>Authors & License</h2>
+        <p>Creators:
+            <a href="https://github.com/ArturAda" target="_blank">Arthur Adamov</a> &
+            <a href="https://github.com/vadimzachesov" target="_blank">Vadim Zachesov</a>
+        </p>
+        <p>License: MIT. You are free to use and modify this code.</p>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-settings" class="page">
+        <h2>Settings & Customization</h2>
+        <div id="settings-gallery" class="settings-gallery"></div>
+        <p id="settings-message" class="settings-message" aria-live="polite"></p>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-history" class="page">
+        <h2>History</h2>
+        <section class="history-panel">
+            <div class="history-filters" aria-label="History filters">
+                <label><input type="checkbox" data-history-sort="desc" checked> Newest</label>
+                <label><input type="checkbox" data-history-sort="asc"> Oldest</label>
+                <label><input type="checkbox" data-history-filter="win"> Wins</label>
+                <label><input type="checkbox" data-history-filter="loss"> Losses</label>
+                <label><input type="checkbox" data-history-filter="draw"> Draws</label>
+            </div>
+            <div id="history-list" class="history-list"></div>
+        </section>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-history-detail" class="page">
+        <h2 id="history-detail-title">Game Review</h2>
+        <section class="history-detail-layout">
+            <div id="history-analysis-board" class="history-analysis-board"></div>
+            <aside class="history-analysis-panel">
+                <div class="history-analytics">
+                    <div>
+                        <span>Accuracy</span>
+                        <strong id="history-accuracy">-</strong>
+                    </div>
+                    <div>
+                        <span>Result</span>
+                        <strong id="history-result">-</strong>
+                    </div>
+                    <div>
+                        <span>Opening</span>
+                        <strong id="history-opening">-</strong>
+                    </div>
+                </div>
+                <div id="history-move-list" class="history-move-list"></div>
+            </aside>
+        </section>
+        <button class="btn back-btn" onclick="navigateTo('page-history')">← Back</button>
+    </div>
+
+    <div id="page-modern" class="page">
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+        <div class="classic-setup">
+            <h2>Choose Modern Match</h2>
+            <h3>Board Size</h3>
+            <div class="board-size-buttons modern-board-size-buttons">
+                <button type="button" class="board-size-btn" data-modern-board-size="10">10×10</button>
+                <button type="button" class="board-size-btn" data-modern-board-size="12">12×12</button>
+                <button type="button" class="board-size-btn soon-mode-btn">Soon</button>
+            </div>
+            <h3>Time Control</h3>
+            <div class="time-control-buttons">
+                <button type="button" class="time-control-btn" data-modern-time-control="1">1 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="5">5 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="10">10 min</button>
+                <button type="button" class="time-control-btn" data-modern-time-control="30">30 min</button>
+            </div>
+            <button id="modern-start-btn" class="mini-action-btn classic-start-btn" type="button" disabled>Find Match</button>
+        </div>
+    </div>
+
+    <div id="page-classic" class="page">
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+        <div id="classic-setup" class="classic-setup">
+            <h2>Choose Classic Match</h2>
+            <h3>Time Control</h3>
+            <div class="time-control-buttons">
+                <button type="button" class="time-control-btn" data-time-control="1">1 min</button>
+                <button type="button" class="time-control-btn" data-time-control="5">5 min</button>
+                <button type="button" class="time-control-btn" data-time-control="10">10 min</button>
+                <button type="button" class="time-control-btn" data-time-control="30">30 min</button>
+            </div>
+            <button id="classic-start-btn" class="mini-action-btn classic-start-btn" type="button" disabled>Find Match</button>
+        </div>
+        <div id="classic-board-shell" class="classic-board-shell hidden">
+            <div class="classic-timers" aria-label="Game timers">
+                <div id="opponent-timer" class="game-timer timer-good">
+                    <img class="timer-frame" src="images/timer/Timer.png" alt="">
+                    <img class="timer-tint timer-green" src="images/timer/Green.png" alt="">
+                    <img class="timer-tint timer-red" src="images/timer/Red.png" alt="">
+                    <span class="timer-label">Opponent</span>
+                    <span id="opponent-timer-digits" class="timer-digits" aria-label="Opponent time"></span>
+                </div>
+                <div id="me-timer" class="game-timer timer-good">
+                    <img class="timer-frame" src="images/timer/Timer.png" alt="">
+                    <img class="timer-tint timer-green" src="images/timer/Green.png" alt="">
+                    <img class="timer-tint timer-red" src="images/timer/Red.png" alt="">
+                    <span class="timer-label">Me</span>
+                    <span id="me-timer-digits" class="timer-digits" aria-label="Your time"></span>
+                </div>
+            </div>
+            <div class="classic-toolbar">
+                <span id="classic-board-size-label" class="classic-board-size-label"></span>
+                <span id="matchmaking-status" class="matchmaking-status"></span>
+            </div>
+            <div class="classic-game-layout">
+                <div class="board-column">
+                    <div id="opponent-captured" class="captured-tray captured-tray-top" aria-label="Opponent captures"></div>
+                    <div id="myBoard" class="board-host"></div>
+                    <div id="me-captured" class="captured-tray captured-tray-bottom" aria-label="Your captures"></div>
+                </div>
+                <aside class="game-side-panel">
+                    <div class="emoji-chat" aria-label="Emoji chat">
+                        <div id="emoji-chat-log" class="emoji-chat-log" aria-live="polite"></div>
+                        <div id="emoji-chat-picker" class="emoji-chat-picker"></div>
+                    </div>
+                    <section id="piece-legend" class="piece-legend" aria-label="Pieces"></section>
+                </aside>
+            </div>
+        </div>
+        <div id="match-not-found-overlay" class="match-not-found-overlay hidden" role="status" aria-live="assertive">
+            Sorry, match was not found
+        </div>
+    </div>
+
+    <script src="js/jquery-3.6.0.min.js"></script>
+    <script src="js/chessboard-1.0.0.min.js"></script>
+    <script src="js/lobby.js"></script>
+</body>
+</html>

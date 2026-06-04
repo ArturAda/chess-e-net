@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="light cheese board square">
+  <title>Light cheese board square</title>
+  <rect width="256" height="256" rx="0" fill="#f3ead2"/>
+  <rect width="256" height="256" fill="#f3ead2"/><path d="M18 34h220M20 222h218" stroke="#fff8df" stroke-width="6" opacity="0.55"/>
+  <path d="M31 143c33-16 50 16 81 3 32-13 46-42 93-21" fill="none" stroke="#b99c60" stroke-width="5" opacity="0.28"/>
+  <path d="M29 35h198M30 221h196M35 29v198M221 29v198" stroke="#cdb782" stroke-width="6" opacity="0.28"/>
+  <ellipse cx="62" cy="76" rx="20" ry="15" fill="#d7bd76" opacity="0.45"/>
+    <circle cx="169" cy="55" r="12" fill="#d7bd76" opacity="0.38"/>
+    <circle cx="205" cy="178" r="22" fill="#d7bd76" opacity="0.32"/>
+    <circle cx="92" cy="196" r="10" fill="#b99c60" opacity="0.28"/>
+  <rect x="35" y="119" width="8" height="8" fill="#fff6cf" opacity="0.62"/>
+  <rect x="148" y="163" width="7" height="7" fill="#fff6cf" opacity="0.5"/>
+  <rect x="223" y="40" width="6" height="6" fill="#fff6cf" opacity="0.48"/>
+</svg>

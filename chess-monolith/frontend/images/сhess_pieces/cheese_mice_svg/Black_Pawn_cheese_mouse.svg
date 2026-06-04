@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="Black pawn cheese mouse chess piece">
+  <title>Black pawn cheese mouse chess piece</title>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="6" stdDeviation="3" flood-color="#000" flood-opacity="0.22"/>
+    </filter>
+  </defs>
+  <g stroke-linecap="round" stroke-linejoin="round" filter="url(#shadow)">
+    <path d="M53 179C24 180 22 145 52 145" fill="none" stroke="#617780" stroke-width="13"/>
+    <ellipse cx="130" cy="210" rx="70" ry="16" fill="#233440" opacity="0.18"/>
+    
+        <circle cx="128" cy="69" r="21" fill="#c6d5d7" stroke="#233440" stroke-width="7"/>
+        <circle cx="120" cy="63" r="5" fill="#edf3e8" opacity="0.9"/>
+        <circle cx="136" cy="73" r="4" fill="#76aea0" opacity="0.85"/>
+    <ellipse cx="94" cy="111" rx="22" ry="27" fill="#a7bdc5" stroke="#233440" stroke-width="7"/>
+    <ellipse cx="158" cy="111" rx="22" ry="27" fill="#a7bdc5" stroke="#233440" stroke-width="7"/>
+    <path d="M55 184C61 134 92 108 139 111c43 3 76 29 72 69-3 33-32 47-79 47-51 0-83-14-77-43Z" fill="#c6d5d7" stroke="#233440" stroke-width="8"/>
+    <path d="M65 173c18-35 46-50 82-47 29 2 51 17 61 39-4-27-31-51-68-54-45-3-75 22-85 73 0 0 5-7 10-11Z" fill="#edf3e8" opacity="0.72"/>
+    <ellipse cx="166" cy="137" rx="32" ry="24" fill="#c6d5d7" stroke="#233440" stroke-width="7"/>
+    <ellipse cx="190" cy="144" rx="15" ry="10" fill="#edf3e8" stroke="#233440" stroke-width="6"/>
+    <circle cx="181" cy="129" r="5" fill="#101f29"/>
+    <circle cx="204" cy="143" r="5" fill="#101f29"/>
+    <path d="M197 156h23M196 163h20M196 150h19" stroke="#233440" stroke-width="4"/>
+    <circle cx="94" cy="166" r="10" fill="#76aea0" opacity="0.88"/>
+    <circle cx="128" cy="151" r="7" fill="#76aea0" opacity="0.82"/>
+    <circle cx="151" cy="190" r="11" fill="#357f78" opacity="0.72"/>
+    <circle cx="112" cy="202" r="6" fill="#71838c" opacity="0.75"/>
+    <path d="M77 225h108" stroke="#233440" stroke-width="11"/>
+    <path d="M94 225h24M145 225h25" stroke="#71838c" stroke-width="8"/>
+  </g>
+</svg>
