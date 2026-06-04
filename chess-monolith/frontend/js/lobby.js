@@ -7,6 +7,8 @@ const ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
 const ACCOUNT_AVATAR_SIZE = 256;
 const TIMER_ROOT = `${ASSET_ROOT}/timer`;
 const TIMER_DIGIT_ROOT = `${TIMER_ROOT}/digits`;
+const CUSTOM_DRAG_START_THRESHOLD = 5;
+const CUSTOM_DRAG_CLICK_SUPPRESS_MS = 250;
 
 const PIECE_TYPES = ['P', 'R', 'N', 'B', 'Q', 'K'];
 const PIECE_NAMES = {
@@ -308,6 +310,8 @@ let currentTimeControlMinutes = null;
 let currentGameMode = 'classic';
 let currentCustomPosition = null;
 let selectedCustomSquare = null;
+let customDragState = null;
+let customDragSuppressClickUntil = 0;
 let selectedClassicBoardSize = null;
 let selectedClassicTimeMinutes = null;
 let selectedModernBoardSize = null;
@@ -409,7 +413,7 @@ function setAccountEntryVisibility(pageId) {
 }
 
 function setPageScrollMode(pageId) {
-    document.body.classList.toggle('no-page-scroll', pageId === 'page-menu' || pageId === 'page-settings');
+    document.body.classList.toggle('no-page-scroll', pageId === 'page-menu' || pageId === 'page-settings' || pageId === 'page-classic');
     document.body.classList.toggle('settings-page-active', pageId === 'page-settings');
     applyFallingPiecesPreference();
 }
@@ -677,6 +681,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
 }
 
 function destroyBoard() {
+    cancelCustomDrag();
     if (board) {
         board.destroy();
         board = null;
@@ -1300,10 +1305,12 @@ function renderCapturedTray(elementId, pieces) {
     if (!tray) return;
 
     tray.innerHTML = '';
-    pieces.slice(-12).forEach(piece => {
+    pieces.forEach(piece => {
         const img = document.createElement('img');
         img.src = getPieceSrc(piece);
         img.alt = '';
+        img.loading = 'eager';
+        img.decoding = 'sync';
         tray.appendChild(img);
     });
 }
@@ -1397,9 +1404,10 @@ function renderCustomBoard(host, size, position) {
                 img.className = 'custom-piece';
                 img.src = getPieceSrc(piece);
                 img.alt = '';
-                img.draggable = true;
+                img.draggable = false;
                 img.dataset.from = key;
-                img.addEventListener('dragstart', handleCustomDragStart);
+                img.addEventListener('dragstart', event => event.preventDefault());
+                img.addEventListener('pointerdown', handleCustomPointerDown);
                 square.appendChild(img);
             }
 
@@ -1426,18 +1434,176 @@ function appendCustomNotation(square, row, col, size) {
     }
 }
 
-function handleCustomDragStart(event) {
-    event.dataTransfer.setData('text/plain', event.currentTarget.dataset.from);
-    event.dataTransfer.effectAllowed = 'move';
+function handleCustomPointerDown(event) {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    if (!currentCustomPosition) return;
+
+    const sourceImg = event.currentTarget;
+    const from = sourceImg.dataset.from;
+    const piece = currentCustomPosition[from];
+    if (!from || !piece) return;
+
+    cancelCustomDrag();
+    customDragState = {
+        pointerId: event.pointerId,
+        from,
+        piece,
+        sourceImg,
+        sourceSquare: sourceImg.closest('.custom-square'),
+        startX: event.clientX,
+        startY: event.clientY,
+        dragImage: null,
+        dragWidth: 0,
+        dragHeight: 0,
+        targetSquare: null
+    };
+
+    sourceImg.addEventListener('pointermove', handleCustomPointerMove);
+    sourceImg.addEventListener('pointerup', handleCustomPointerUp);
+    sourceImg.addEventListener('pointercancel', handleCustomPointerCancel);
+    sourceImg.setPointerCapture?.(event.pointerId);
+}
+
+function handleCustomPointerMove(event) {
+    const state = customDragState;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+    if (!state.dragImage && distance < CUSTOM_DRAG_START_THRESHOLD) return;
+    if (!state.dragImage) {
+        startCustomDragVisual(event);
+    }
+
+    event.preventDefault();
+    moveCustomDragVisual(event.clientX, event.clientY);
+    setCustomDragTarget(getCustomSquareAtPoint(event.clientX, event.clientY));
+}
+
+function handleCustomPointerUp(event) {
+    const state = customDragState;
+    if (!state || state.pointerId !== event.pointerId) return;
+
+    const wasDragging = Boolean(state.dragImage);
+    const targetSquare = wasDragging ? getCustomSquareAtPoint(event.clientX, event.clientY) : null;
+    const to = targetSquare?.dataset.square || null;
+    const from = state.from;
+
+    if (wasDragging) {
+        event.preventDefault();
+        customDragSuppressClickUntil = Date.now() + CUSTOM_DRAG_CLICK_SUPPRESS_MS;
+    }
+
+    cancelCustomDrag();
+
+    if (wasDragging) {
+        commitCustomMove(from, to);
+    }
+}
+
+function handleCustomPointerCancel(event) {
+    const state = customDragState;
+    if (!state || state.pointerId !== event.pointerId) return;
+    if (state.dragImage) {
+        customDragSuppressClickUntil = Date.now() + CUSTOM_DRAG_CLICK_SUPPRESS_MS;
+    }
+    cancelCustomDrag();
+}
+
+function startCustomDragVisual(event) {
+    const state = customDragState;
+    if (!state) return;
+
+    const rect = state.sourceImg.getBoundingClientRect();
+    const dragImage = document.createElement('img');
+    dragImage.className = 'custom-drag-piece';
+    dragImage.src = state.sourceImg.currentSrc || state.sourceImg.src;
+    dragImage.alt = '';
+    dragImage.style.width = `${rect.width}px`;
+    dragImage.style.height = `${rect.height}px`;
+
+    state.dragImage = dragImage;
+    state.dragWidth = rect.width;
+    state.dragHeight = rect.height;
+    selectedCustomSquare = null;
+
+    document.querySelector('#myBoard .custom-square.selected')?.classList.remove('selected');
+    document.body.appendChild(dragImage);
+    state.sourceImg.classList.add('dragging-source');
+    state.sourceSquare?.classList.add('drag-source');
+    moveCustomDragVisual(event.clientX, event.clientY);
+}
+
+function moveCustomDragVisual(clientX, clientY) {
+    const state = customDragState;
+    if (!state?.dragImage) return;
+
+    state.dragImage.style.transform = `translate3d(${clientX - state.dragWidth / 2}px, ${clientY - state.dragHeight / 2}px, 0)`;
+}
+
+function getCustomSquareAtPoint(clientX, clientY) {
+    const element = document.elementFromPoint(clientX, clientY);
+    return element?.closest?.('#myBoard .custom-square') || null;
+}
+
+function setCustomDragTarget(square) {
+    const state = customDragState;
+    if (!state || state.targetSquare === square) return;
+
+    state.targetSquare?.classList.remove('drag-target');
+    state.targetSquare = null;
+
+    if (square?.dataset.square) {
+        square.classList.add('drag-target');
+        state.targetSquare = square;
+    }
+}
+
+function cancelCustomDrag() {
+    const state = customDragState;
+    if (!state) return;
+
+    state.targetSquare?.classList.remove('drag-target');
+    state.sourceSquare?.classList.remove('drag-source');
+    state.sourceImg?.classList.remove('dragging-source');
+    state.dragImage?.remove();
+    state.sourceImg?.removeEventListener('pointermove', handleCustomPointerMove);
+    state.sourceImg?.removeEventListener('pointerup', handleCustomPointerUp);
+    state.sourceImg?.removeEventListener('pointercancel', handleCustomPointerCancel);
+
+    if (state.sourceImg?.hasPointerCapture?.(state.pointerId)) {
+        state.sourceImg.releasePointerCapture(state.pointerId);
+    }
+
+    customDragState = null;
 }
 
 function handleCustomDrop(event) {
     event.preventDefault();
-    if (!currentCustomPosition || !currentVisualBoardSize) return;
 
     const from = event.dataTransfer.getData('text/plain');
     const to = event.currentTarget.dataset.square;
-    if (!from || !to || from === to || !currentCustomPosition[from]) return;
+    commitCustomMove(from, to);
+}
+
+function handleCustomSquareClick(event) {
+    if (!currentCustomPosition) return;
+    if (Date.now() < customDragSuppressClickUntil) return;
+
+    const target = event.currentTarget.dataset.square;
+    if (!target) return;
+
+    if (selectedCustomSquare && selectedCustomSquare !== target && currentCustomPosition[selectedCustomSquare]) {
+        commitCustomMove(selectedCustomSquare, target);
+        return;
+    }
+
+    selectedCustomSquare = currentCustomPosition[target] ? target : null;
+    refreshCurrentBoard(false);
+}
+
+function commitCustomMove(from, to) {
+    if (!currentCustomPosition || !currentVisualBoardSize) return false;
+    if (!from || !to || from === to || !currentCustomPosition[from]) return false;
 
     const movingPiece = currentCustomPosition[from];
     trackCapture(movingPiece, currentCustomPosition[to]);
@@ -1447,28 +1613,7 @@ function handleCustomDrop(event) {
     refreshCurrentBoard(false);
     renderCapturedPieces();
     handleLocalMoveComplete();
-}
-
-function handleCustomSquareClick(event) {
-    if (!currentCustomPosition) return;
-
-    const target = event.currentTarget.dataset.square;
-    if (!target) return;
-
-    if (selectedCustomSquare && selectedCustomSquare !== target && currentCustomPosition[selectedCustomSquare]) {
-        const movingPiece = currentCustomPosition[selectedCustomSquare];
-        trackCapture(movingPiece, currentCustomPosition[target]);
-        currentCustomPosition[target] = movingPiece;
-        delete currentCustomPosition[selectedCustomSquare];
-        selectedCustomSquare = null;
-        refreshCurrentBoard(false);
-        renderCapturedPieces();
-        handleLocalMoveComplete();
-        return;
-    }
-
-    selectedCustomSquare = currentCustomPosition[target] ? target : null;
-    refreshCurrentBoard(false);
+    return true;
 }
 
 function buildVisualPosition(size) {

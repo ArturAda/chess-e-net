@@ -1,6 +1,9 @@
 :root {
     --page-pad: clamp(10px, 2vw, 24px);
-    --classic-board-size: min(58vw, calc(100dvh - 220px), 620px);
+    --captured-piece-size: clamp(36px, 3.2vw, 44px);
+    --captured-tray-height: calc(var(--captured-piece-size) + var(--captured-piece-size) + 10px);
+    --classic-board-size: min(58vw, calc(100dvh - var(--page-pad) - var(--page-pad) - var(--captured-tray-height) - var(--captured-tray-height) - 36px), 620px);
+    --classic-shell-height: calc(var(--classic-board-size) + var(--captured-tray-height) + var(--captured-tray-height) + 8px);
     --board-light-color: #f0d9b5;
     --board-dark-color: #b58863;
     --board-light-image: none;
@@ -1399,7 +1402,9 @@ body > .piece-417db {
 
 #page-classic.active {
     display: flex;
-    min-height: calc(100dvh - var(--page-pad) - var(--page-pad));
+    height: calc(100dvh - var(--page-pad) - var(--page-pad));
+    min-height: 0;
+    overflow: hidden;
     flex-direction: column;
     align-items: center;
     justify-content: center;
@@ -1498,6 +1503,7 @@ body > .piece-417db {
 
 .classic-board-shell {
     width: min(100%, 1460px);
+    max-height: 100%;
     margin: 0 auto;
 }
 
@@ -1654,35 +1660,44 @@ body > .piece-417db {
 
 .board-column {
     display: grid;
-    grid-template-rows: 48px var(--classic-board-size) 48px;
-    gap: 2px;
+    grid-template-rows: var(--captured-tray-height) var(--classic-board-size) var(--captured-tray-height);
+    gap: 4px;
     width: var(--classic-board-size);
 }
 
 .captured-tray {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
+    align-content: flex-start;
+    flex-wrap: wrap;
     gap: 5px;
+    height: var(--captured-tray-height);
     min-width: 0;
-    overflow: hidden;
+    overflow: visible;
     padding: 0 4px;
     border: 0;
     background: transparent;
 }
 
 .captured-tray img {
-    width: 44px;
-    height: 44px;
+    width: var(--captured-piece-size);
+    height: var(--captured-piece-size);
     object-fit: contain;
     flex: 0 0 auto;
 }
 
 .captured-tray-top {
-    justify-content: flex-start;
+    flex-wrap: wrap-reverse;
+    justify-content: flex-end;
+    align-items: flex-start;
+    align-content: flex-start;
 }
 
 .captured-tray-bottom {
-    justify-content: flex-end;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: flex-start;
+    align-content: flex-start;
 }
 
 .game-side-panel {
@@ -1690,7 +1705,7 @@ body > .piece-417db {
     grid-template-columns: minmax(270px, 310px) minmax(400px, 1fr);
     gap: 18px;
     align-items: stretch;
-    height: calc(var(--classic-board-size) + 100px);
+    height: var(--classic-shell-height);
     min-height: 0;
 }
 
@@ -1765,13 +1780,19 @@ body > .piece-417db {
     user-select: none;
 }
 
-.custom-square.selected::after {
+.custom-square.selected::after,
+.custom-square.drag-source::after,
+.custom-square.drag-target::after {
     content: "";
     position: absolute;
     inset: 0;
-    z-index: 1;
+    z-index: 3;
     box-shadow: inset 0 0 0 4px rgba(255,242,109,0.95), inset 0 0 18px rgba(255,242,109,0.52);
     pointer-events: none;
+}
+
+.custom-square.drag-target::after {
+    box-shadow: inset 0 0 3px 3px #ff0, inset 0 0 18px rgba(255,242,109,0.68);
 }
 
 .custom-piece {
@@ -1783,10 +1804,28 @@ body > .piece-417db {
     object-fit: contain;
     cursor: grab;
     user-select: none;
+    touch-action: none;
+    -webkit-user-drag: none;
 }
 
 .custom-piece:active {
     cursor: grabbing;
+}
+
+.custom-piece.dragging-source {
+    opacity: 0;
+}
+
+.custom-drag-piece {
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 20;
+    object-fit: contain;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-drag: none;
+    will-change: transform;
 }
 
 .custom-notation {
