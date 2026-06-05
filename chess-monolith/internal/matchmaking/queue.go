@@ -3,7 +3,6 @@ package matchmaking
 import (
 	"chess-monolith/internal/users"
 	"chess-monolith/pkg/elo"
-	"encoding/json"
 	"log"
 	"sort"
 	"sync"
@@ -210,14 +209,8 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 			}
 		}
 
-		payloadBytes, _ := json.Marshal(sess.ExportState())
-		wsMsg, _ := json.Marshal(ws.Message{
-			Type:    "GAME_STATE",
-			Payload: payloadBytes,
-		})
-
-		player1.Send <- wsMsg
-		player2.Send <- wsMsg
+		player1.SendGameState()
+		player2.SendGameState()
 	}
 
 	onTimeout := func(status string) {
@@ -226,14 +219,8 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 
 	go sess.RunTimer(onTimeout)
 
-	initialStateBytes, _ := json.Marshal(sess.ExportState())
-	startMsg, _ := json.Marshal(ws.Message{
-		Type:    "GAME_STATE",
-		Payload: initialStateBytes,
-	})
-
-	player1.Send <- startMsg
-	player2.Send <- startMsg
+	player1.SendGameState()
+	player2.SendGameState()
 
 	log.Printf("Game started: %s (White) vs %s (Black) | %s | Ranked: %v | Time: %v",
 		player1.UserID, player2.UserID, mode, isRanked, timeLimit)

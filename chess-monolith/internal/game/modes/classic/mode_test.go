@@ -40,6 +40,10 @@ func TestEnPassant(t *testing.T) {
 
 	_, targetOccupied := s.Board.Grid[core.Pos{X: 3, Y: 4}]
 	assert.False(t, targetOccupied, "Black pawn should be removed")
+	lastRecord := s.Board.History[len(s.Board.History)-1]
+	assert.NotNil(t, lastRecord.Captured, "En passant should store captured pawn in move history")
+	assert.Equal(t, "pawn", lastRecord.Captured.Type)
+	assert.Equal(t, core.Black, lastRecord.Captured.Color)
 }
 
 func TestLongGamePlaythrough_WithStateValidation(t *testing.T) {

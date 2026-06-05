@@ -36,21 +36,24 @@ type Client struct {
 	Opponent   *Client
 }
 
-// parsePos превращает шахматную координату "e2" в core.Pos (X: 4, Y: 1)
-func parsePos(s string) core.Pos {
-	if len(s) != 2 {
-		return core.Pos{X: -1, Y: -1}
-	}
-	return core.Pos{
-		X: int(s[0] - 'a'),
-		Y: int(s[1] - '1'),
-	}
-}
-
 // Message - универсальная структура для обмена JSON
 type Message struct {
 	Type    string          `json:"type"`              // "MOVE", "JOIN_QUEUE", "RESIGN"
 	Payload json.RawMessage `json:"payload,omitempty"` // Динамические данные
+}
+
+func (c *Client) SendGameState() {
+	if c == nil || c.ActiveGame == nil {
+		return
+	}
+
+	stateDTO := c.ActiveGame.ExportStateForPlayer(c.Color)
+	stateBytes, _ := json.Marshal(stateDTO)
+	msg, _ := json.Marshal(Message{
+		Type:    "GAME_STATE",
+		Payload: stateBytes,
+	})
+	c.Send <- msg
 }
 
 // ReadPump читает сообщения из сокета (от браузера к серверу)
@@ -135,7 +138,19 @@ func (c *Client) ReadPump() {
 				continue
 			}
 
-			err := c.ActiveGame.MakeMove(parsePos(moveReq.From), parsePos(moveReq.To))
+			from, err := core.ParseSquare(moveReq.From)
+			if err != nil {
+				c.sendError("Invalid from square")
+				continue
+			}
+
+			to, err := core.ParseSquare(moveReq.To)
+			if err != nil {
+				c.sendError("Invalid to square")
+				continue
+			}
+
+			err = c.ActiveGame.MakeMove(from, to)
 			if err != nil {
 				c.sendError(err.Error())
 				continue
@@ -148,16 +163,9 @@ func (c *Client) ReadPump() {
 			if status != "active" {
 				c.ActiveGame.EndGame(status)
 			} else {
-				stateDTO := c.ActiveGame.ExportState()
-				stateBytes, _ := json.Marshal(stateDTO)
-				broadcastMsg, _ := json.Marshal(Message{
-					Type:    "GAME_STATE",
-					Payload: stateBytes,
-				})
-
-				c.Send <- broadcastMsg
+				c.SendGameState()
 				if c.Opponent != nil {
-					c.Opponent.Send <- broadcastMsg
+					c.Opponent.SendGameState()
 				}
 			}
 
