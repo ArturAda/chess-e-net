@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -32,6 +33,7 @@ func (h *Handler) SetupRoutes(router *gin.Engine) {
 	{
 		api.POST("/register", h.Register)
 		api.POST("/login", h.Login)
+		api.GET("/me", h.Me)
 	}
 }
 
@@ -91,4 +93,41 @@ func (h *Handler) Login(c *gin.Context) {
 		"token":   token,
 		"message": "Login successful",
 	})
+}
+
+func (h *Handler) Me(c *gin.Context) {
+	token, ok := bearerTokenFromHeader(c.GetHeader("Authorization"))
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Authorization bearer token is required"})
+		return
+	}
+
+	profile, err := h.service.GetCurrentUser(token)
+	if err != nil {
+		if errors.Is(err, ErrUnauthorized) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
+		}
+
+		if errors.Is(err, ErrDatabase) {
+			log.Printf("[ERROR] Database failure during current user lookup: %v", err)
+		} else {
+			log.Printf("[ERROR] Unknown failure during current user lookup: %v", err)
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, profile)
+}
+
+func bearerTokenFromHeader(header string) (string, bool) {
+	const prefix = "Bearer "
+	if !strings.HasPrefix(header, prefix) {
+		return "", false
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, prefix))
+	return token, token != ""
 }
