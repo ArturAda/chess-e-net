@@ -3,7 +3,7 @@ const PIECES_ROOT = `${ASSET_ROOT}/сhess_pieces`;
 const USER_STYLES_KEY = 'chessemag_user_styles';
 const USER_STYLES_VERSION = 2;
 const CURRENT_SETTINGS_KEY = 'chessemag_current_settings';
-const ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
+const LEGACY_ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
 const ACCOUNT_AVATAR_SIZE = 256;
 const TIMER_ROOT = `${ASSET_ROOT}/timer`;
 const TIMER_DIGIT_ROOT = `${TIMER_ROOT}/digits`;
@@ -329,10 +329,10 @@ let emojiMessages = [];
 let userStyles = loadUserStyles();
 let settings = loadCurrentSettings();
 let accountProfile = loadAccountProfile();
-let accountPasswordVisible = false;
 let accountEditing = false;
 
 document.addEventListener('DOMContentLoaded', () => {
+    clearLegacyAccountProfile();
     clearLocalHistoryRecords();
     normalizeSettings();
     bindClassicSetupControls();
@@ -340,6 +340,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindHistoryControls();
     bindAccountForm();
     renderAccountProfile();
+    refreshAccountFromBackend();
     setAccountEntryVisibility('page-menu');
     setPageScrollMode('page-menu');
     applySelectedBackground();
@@ -393,7 +394,6 @@ function navigateTo(pageId) {
 
     if (pageId === 'page-account') {
         accountEditing = false;
-        accountPasswordVisible = false;
         renderAccountProfile();
         showAccountMessage('');
     }
@@ -1055,62 +1055,72 @@ function bindAccountForm() {
     const form = document.getElementById('account-form');
     const loginForm = document.getElementById('account-login-form');
     const profileAvatarInput = document.getElementById('account-profile-avatar-input');
-    const passwordToggle = document.getElementById('account-password-toggle');
-    const editButton = document.getElementById('account-edit-btn');
+    const refreshButton = document.getElementById('account-refresh-btn');
     const logoutButton = document.getElementById('account-logout-btn');
 
-    form?.addEventListener('submit', event => {
+    form?.addEventListener('submit', async event => {
         event.preventDefault();
-        const username = document.getElementById('account-username')?.value.trim() || 'Player';
+        const username = document.getElementById('account-username')?.value.trim() || '';
         const email = document.getElementById('account-email')?.value.trim() || '';
-        const password = document.getElementById('account-password')?.value || (accountEditing ? accountProfile.password : '');
-        if (!password) {
-            showAccountMessage('Password is required.');
+        const passwordInput = document.getElementById('account-password');
+        const password = passwordInput?.value || '';
+
+        if (!username || !email || !password) {
+            showAccountMessage('Username, email and password are required.');
             return;
         }
 
-        accountProfile = {
-            username,
-            email,
-            password,
-            avatarSrc: accountEditing ? accountProfile.avatarSrc || '' : '',
-            rating: accountProfile.rating || '-',
-            registered: true,
-            signedIn: true
-        };
         try {
-            persistAccountProfile();
+            setAccountFormsBusy(true);
+            showAccountMessage('Creating account...');
+            await ChessApi.register({ username, email, password });
+
+            if (passwordInput) passwordInput.value = '';
+            const loginEmail = document.getElementById('account-login-email');
+            if (loginEmail) loginEmail.value = email;
+
+            accountEditing = false;
+            renderAccountProfile();
+            showAccountMessage('Account created. Log in with your email and password.');
         } catch (error) {
-            showAccountMessage(error.message);
-            return;
+            showAccountMessage(getAccountErrorMessage(error));
+        } finally {
+            setAccountFormsBusy(false);
         }
-        accountPasswordVisible = false;
-        accountEditing = false;
-        renderAccountProfile();
-        showAccountMessage('Account saved.');
     });
 
-    loginForm?.addEventListener('submit', event => {
+    loginForm?.addEventListener('submit', async event => {
         event.preventDefault();
-        const username = document.getElementById('account-login-username')?.value.trim() || '';
-        const password = document.getElementById('account-login-password')?.value || '';
+        const email = document.getElementById('account-login-email')?.value.trim() || '';
+        const passwordInput = document.getElementById('account-login-password');
+        const password = passwordInput?.value || '';
 
-        if (!accountProfile.registered) {
-            showAccountMessage('No local account is registered yet.');
+        if (!email || !password) {
+            showAccountMessage('Email and password are required.');
             return;
         }
 
-        if (username !== accountProfile.username || password !== accountProfile.password) {
-            showAccountMessage('Username or password is incorrect.');
-            return;
-        }
+        try {
+            setAccountFormsBusy(true);
+            showAccountMessage('Logging in...');
+            await ChessApi.login({ email, password });
+            const profile = await ChessApi.me();
 
-        accountProfile.signedIn = true;
-        persistAccountProfile();
-        accountPasswordVisible = false;
-        accountEditing = false;
-        renderAccountProfile();
-        showAccountMessage('Logged in.');
+            if (passwordInput) passwordInput.value = '';
+            applyBackendAccountProfile(profile);
+            accountEditing = false;
+            renderAccountProfile();
+            showAccountMessage('Logged in.');
+        } catch (error) {
+            if (error?.status === 401) {
+                ChessApi.clearToken();
+                accountProfile = createEmptyAccountProfile();
+                renderAccountProfile();
+            }
+            showAccountMessage(getAccountErrorMessage(error));
+        } finally {
+            setAccountFormsBusy(false);
+        }
     });
 
     profileAvatarInput?.addEventListener('change', async event => {
@@ -1119,9 +1129,8 @@ function bindAccountForm() {
 
         try {
             accountProfile.avatarSrc = await readAccountAvatarAsDataUrl(file);
-            persistAccountProfile();
             renderAccountProfile();
-            showAccountMessage('Profile image saved locally.');
+            showAccountMessage('Profile image applied for this browser session.');
         } catch (error) {
             showAccountMessage(error.message);
         } finally {
@@ -1129,21 +1138,14 @@ function bindAccountForm() {
         }
     });
 
-    passwordToggle?.addEventListener('click', () => {
-        accountPasswordVisible = !accountPasswordVisible;
-        renderAccountProfile();
-    });
-
-    editButton?.addEventListener('click', () => {
-        accountEditing = true;
-        renderAccountProfile();
-        showAccountMessage('');
+    refreshButton?.addEventListener('click', async () => {
+        await refreshAccountFromBackend({ showMessages: true });
     });
 
     logoutButton?.addEventListener('click', () => {
-        accountProfile.signedIn = false;
-        persistAccountProfile();
-        accountPasswordVisible = false;
+        ChessApi.logout();
+        clearLegacyAccountProfile();
+        accountProfile = createEmptyAccountProfile();
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -1151,30 +1153,17 @@ function bindAccountForm() {
 }
 
 function loadAccountProfile() {
-    try {
-        const parsed = JSON.parse(localStorage.getItem(ACCOUNT_PROFILE_KEY));
-        const username = parsed?.username || '';
-        const password = parsed?.password || '';
-        const registered = Boolean(parsed?.registered || (username && password));
-        return {
-            username,
-            email: parsed?.email || '',
-            password,
-            avatarSrc: parsed?.avatarSrc || '',
-            rating: parsed?.rating || '-',
-            registered,
-            signedIn: registered ? parsed?.signedIn ?? true : false
-        };
-    } catch {
-        return createEmptyAccountProfile();
-    }
+    const profile = createEmptyAccountProfile();
+    const hasToken = Boolean(window.ChessApi?.hasToken?.());
+    profile.registered = hasToken;
+    profile.signedIn = hasToken;
+    return profile;
 }
 
 function renderAccountProfile() {
     const username = document.getElementById('account-username');
     const email = document.getElementById('account-email');
     const password = document.getElementById('account-password');
-    const loginUsername = document.getElementById('account-login-username');
     const loginPassword = document.getElementById('account-login-password');
     const chip = document.getElementById('account-chip');
     const authPanel = document.getElementById('account-auth-panel');
@@ -1183,46 +1172,42 @@ function renderAccountProfile() {
     const accountSubmitButton = document.getElementById('account-submit-btn');
     const profilePanel = document.getElementById('account-profile-panel');
     const profileName = document.getElementById('account-profile-name');
-    const profilePassword = document.getElementById('account-profile-password');
+    const profileEmail = document.getElementById('account-profile-email');
     const profileRating = document.getElementById('account-profile-rating');
 
-    const shouldShowProfile = accountProfile.registered && accountProfile.signedIn && !accountEditing;
-    const shouldShowLogin = accountProfile.registered && !accountProfile.signedIn && !accountEditing;
-    const isEditing = accountProfile.registered && accountEditing;
+    const shouldShowProfile = accountProfile.signedIn;
 
-    if (username) username.value = isEditing ? accountProfile.username || '' : '';
-    if (email) email.value = isEditing ? accountProfile.email || '' : '';
-    if (password) password.value = isEditing ? accountProfile.password || '' : '';
-    if (loginUsername) loginUsername.value = shouldShowLogin ? accountProfile.username || '' : '';
-    if (loginPassword) loginPassword.value = '';
-    if (accountFormTitle) accountFormTitle.textContent = isEditing ? 'Edit Account' : 'Register';
-    if (accountSubmitButton) accountSubmitButton.textContent = isEditing ? 'Save Profile' : 'Register';
+    if (shouldShowProfile) {
+        if (username) username.value = '';
+        if (email) email.value = '';
+        if (password) password.value = '';
+        if (loginPassword) loginPassword.value = '';
+    }
+    if (accountFormTitle) accountFormTitle.textContent = 'Register';
+    if (accountSubmitButton) accountSubmitButton.textContent = 'Register';
     if (chip) {
-        const label = accountProfile.signedIn ? `Account: ${accountProfile.username}` : 'Account';
+        const displayName = accountProfile.username || 'Profile';
+        const label = accountProfile.signedIn ? `Account: ${displayName}` : 'Account';
         chip.title = label;
         chip.setAttribute('aria-label', label);
     }
 
     authPanel?.classList.toggle('hidden', shouldShowProfile);
-    loginForm?.classList.toggle('hidden', !shouldShowLogin);
+    loginForm?.classList.toggle('hidden', shouldShowProfile);
     profilePanel?.classList.toggle('hidden', !shouldShowProfile);
 
     renderAccountAvatar('account-profile-avatar', 'account-profile-avatar-fallback', accountProfile.avatarSrc, accountInitial());
 
     if (profileName) profileName.textContent = accountProfile.username || 'Player';
-    if (profilePassword) {
-        profilePassword.textContent = accountPasswordVisible
-            ? accountProfile.password || '-'
-            : maskPassword(accountProfile.password);
-    }
+    if (profileEmail) profileEmail.textContent = accountProfile.email || '-';
     if (profileRating) profileRating.textContent = accountProfile.rating || '-';
 }
 
 function createEmptyAccountProfile() {
     return {
+        id: '',
         username: '',
         email: '',
-        password: '',
         avatarSrc: '',
         rating: '-',
         registered: false,
@@ -1230,12 +1215,69 @@ function createEmptyAccountProfile() {
     };
 }
 
-function persistAccountProfile() {
-    try {
-        localStorage.setItem(ACCOUNT_PROFILE_KEY, JSON.stringify(accountProfile));
-    } catch {
-        throw new Error('Browser storage is full. Use a smaller profile image.');
+function applyBackendAccountProfile(profile) {
+    accountProfile = {
+        id: profile?.id || '',
+        username: profile?.username || '',
+        email: profile?.email || '',
+        avatarSrc: accountProfile.avatarSrc || '',
+        rating: profile?.rating ?? '-',
+        registered: true,
+        signedIn: true
+    };
+}
+
+async function refreshAccountFromBackend({ showMessages = false } = {}) {
+    if (!window.ChessApi?.hasToken?.()) {
+        accountProfile = createEmptyAccountProfile();
+        renderAccountProfile();
+        return;
     }
+
+    try {
+        if (showMessages) {
+            showAccountMessage('Refreshing profile...');
+        }
+
+        const profile = await ChessApi.me();
+        applyBackendAccountProfile(profile);
+        renderAccountProfile();
+
+        if (showMessages) {
+            showAccountMessage('Profile refreshed.');
+        }
+    } catch (error) {
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+            showAccountMessage(showMessages ? 'Session expired. Log in again.' : '');
+            return;
+        }
+
+        if (showMessages || document.getElementById('page-account')?.classList.contains('active')) {
+            showAccountMessage(getAccountErrorMessage(error));
+        }
+    }
+}
+
+function setAccountFormsBusy(isBusy) {
+    document.querySelectorAll('#account-auth-panel input, #account-auth-panel button, #account-profile-panel button')
+        .forEach(element => {
+            element.disabled = isBusy;
+        });
+}
+
+function clearLegacyAccountProfile() {
+    try {
+        localStorage.removeItem(LEGACY_ACCOUNT_PROFILE_KEY);
+    } catch {
+        // Ignore storage errors; this is only a cleanup for the old local auth profile.
+    }
+}
+
+function getAccountErrorMessage(error) {
+    return window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unexpected account error.';
 }
 
 function renderAccountAvatar(imageId, fallbackId, src, fallbackText) {
@@ -1259,11 +1301,6 @@ function renderAccountAvatar(imageId, fallbackId, src, fallbackText) {
 
 function accountInitial() {
     return (accountProfile.username || '?').trim().charAt(0).toUpperCase() || '?';
-}
-
-function maskPassword(password) {
-    if (!password) return '-';
-    return '*'.repeat(Math.max(8, password.length));
 }
 
 function showAccountMessage(message) {
