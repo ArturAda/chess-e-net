@@ -5,12 +5,21 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
 
 type Service interface {
 	Register(username string, email string, password string) error
 	Login(email string, password string) (string, error)
+	GetCurrentUser(token string) (*UserProfile, error)
+}
+
+type UserProfile struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Rating   int    `json:"rating"`
 }
 
 type service struct {
@@ -68,4 +77,32 @@ func (s *service) Login(email string, password string) (string, error) {
 	}
 
 	return token, nil
+}
+
+func (s *service) GetCurrentUser(token string) (*UserProfile, error) {
+	userID, err := jwtutil.ParseToken(token, s.jwtSecret)
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+
+	parsedUserID, err := uuid.Parse(userID)
+	if err != nil {
+		return nil, ErrUnauthorized
+	}
+
+	user, err := s.repo.GetUserByID(parsedUserID)
+	if err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			return nil, ErrUnauthorized
+		}
+
+		return nil, err
+	}
+
+	return &UserProfile{
+		ID:       user.ID.String(),
+		Username: user.Username,
+		Email:    user.Email,
+		Rating:   user.Rating,
+	}, nil
 }

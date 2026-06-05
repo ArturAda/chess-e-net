@@ -1,6 +1,7 @@
 package users
 
 import (
+	"chess-monolith/pkg/jwtutil"
 	"testing"
 
 	"github.com/google/uuid"
@@ -113,5 +114,81 @@ func TestService_Login_Success(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotEmpty(t, token)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestService_GetCurrentUser_Success(t *testing.T) {
+	mockRepo := new(MockRepository)
+	secret := "secret"
+	service := NewService(mockRepo, secret)
+
+	userID := uuid.New()
+	token, err := jwtutil.GenerateToken(userID.String(), secret)
+	assert.NoError(t, err)
+
+	validUser := &User{
+		ID:           userID,
+		Username:     "tester",
+		Email:        "test@mail.com",
+		PasswordHash: "must-not-leak",
+		Rating:       1320,
+	}
+
+	mockRepo.On("GetUserByID", userID).Return(validUser, nil)
+
+	profile, err := service.GetCurrentUser(token)
+
+	assert.NoError(t, err)
+	assert.Equal(t, userID.String(), profile.ID)
+	assert.Equal(t, "tester", profile.Username)
+	assert.Equal(t, "test@mail.com", profile.Email)
+	assert.Equal(t, 1320, profile.Rating)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestService_GetCurrentUser_InvalidToken(t *testing.T) {
+	mockRepo := new(MockRepository)
+	service := NewService(mockRepo, "secret")
+
+	profile, err := service.GetCurrentUser("not.a.valid.token")
+
+	assert.Nil(t, profile)
+	assert.Equal(t, ErrUnauthorized, err)
+	mockRepo.AssertNotCalled(t, "GetUserByID", mock.Anything)
+}
+
+func TestService_GetCurrentUser_UserNotFound(t *testing.T) {
+	mockRepo := new(MockRepository)
+	secret := "secret"
+	service := NewService(mockRepo, secret)
+
+	userID := uuid.New()
+	token, err := jwtutil.GenerateToken(userID.String(), secret)
+	assert.NoError(t, err)
+
+	mockRepo.On("GetUserByID", userID).Return(nil, ErrUserNotFound)
+
+	profile, err := service.GetCurrentUser(token)
+
+	assert.Nil(t, profile)
+	assert.Equal(t, ErrUnauthorized, err)
+	mockRepo.AssertExpectations(t)
+}
+
+func TestService_GetCurrentUser_DatabaseError(t *testing.T) {
+	mockRepo := new(MockRepository)
+	secret := "secret"
+	service := NewService(mockRepo, secret)
+
+	userID := uuid.New()
+	token, err := jwtutil.GenerateToken(userID.String(), secret)
+	assert.NoError(t, err)
+
+	mockRepo.On("GetUserByID", userID).Return(nil, ErrDatabase)
+
+	profile, err := service.GetCurrentUser(token)
+
+	assert.Nil(t, profile)
+	assert.Equal(t, ErrDatabase, err)
 	mockRepo.AssertExpectations(t)
 }
