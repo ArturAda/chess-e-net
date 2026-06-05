@@ -233,8 +233,11 @@ func (m *Mode) ValidateMove(board *core.Board, turn core.Color, from, to core.Po
 func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	piece := board.Grid[from]
 	targetOk := false
-	if _, ok := board.Grid[to]; ok {
+	var captured *core.Piece
+	if target, ok := board.Grid[to]; ok {
 		targetOk = true
+		capturedPiece := target
+		captured = &capturedPiece
 	}
 
 	// 1. Рокировка (сдвиг ладьи)
@@ -252,7 +255,12 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 
 	// 2. Взятие на проходе (удаление пешки противника)
 	if piece.Type == "pawn" && from.X != to.X && !targetOk {
-		delete(board.Grid, core.Pos{X: to.X, Y: from.Y})
+		enPassantPos := core.Pos{X: to.X, Y: from.Y}
+		if enPassantTarget, ok := board.Grid[enPassantPos]; ok {
+			capturedPiece := enPassantTarget
+			captured = &capturedPiece
+		}
+		delete(board.Grid, enPassantPos)
 	}
 
 	// Основной сдвиг
@@ -272,7 +280,7 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	piece.Meta["moved"] = true
 	board.Grid[to] = piece // Обновляем структуру на доске
 
-	board.History = append(board.History, core.MoveRecord{From: from, To: to, Piece: piece})
+	board.History = append(board.History, core.MoveRecord{From: from, To: to, Piece: piece, Captured: captured})
 }
 
 func (m *Mode) CheckState(board *core.Board, turn core.Color) string {

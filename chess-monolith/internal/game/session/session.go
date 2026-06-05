@@ -3,7 +3,7 @@ package session
 import (
 	"chess-monolith/internal/game/core"
 	"errors"
-	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -29,11 +29,37 @@ type GameSession struct {
 }
 
 type GameStateDTO struct {
+	GameID        string              `json:"game_id"`
+	PlayerColor   string              `json:"player_color,omitempty"`
+	BoardSize     int                 `json:"board_size"`
+	Board         BoardDTO            `json:"board"`
 	Status        string              `json:"status"`             // "active", "white_won", "draw" и т.д.
 	Turn          string              `json:"turn"`               // "white" или "black"
 	WhiteTimeLeft int64               `json:"white_time_left_ms"` // Оставшееся время в миллисекундах
 	BlackTimeLeft int64               `json:"black_time_left_ms"`
 	ValidMoves    map[string][]string `json:"valid_moves"` // Пример: {"e2": ["e3", "e4"], "g1": ["f3", "h3"]}}
+	LastMove      *MoveDTO            `json:"last_move,omitempty"`
+	CapturedWhite []PieceDTO          `json:"captured_white"`
+	CapturedBlack []PieceDTO          `json:"captured_black"`
+}
+
+type BoardDTO struct {
+	Width  int        `json:"width"`
+	Height int        `json:"height"`
+	Pieces []PieceDTO `json:"pieces"`
+}
+
+type PieceDTO struct {
+	Square string `json:"square,omitempty"`
+	Type   string `json:"type"`
+	Color  string `json:"color"`
+}
+
+type MoveDTO struct {
+	From     string    `json:"from"`
+	To       string    `json:"to"`
+	Piece    PieceDTO  `json:"piece"`
+	Captured *PieceDTO `json:"captured,omitempty"`
 }
 
 // NewSession создает партию, просто передав строку "classic"
@@ -144,10 +170,6 @@ func (s *GameSession) RunTimer(onTimeout func(newStatus string)) {
 	}
 }
 
-func posToString(p core.Pos) string {
-	return fmt.Sprintf("%c%d", 'a'+p.X, p.Y+1)
-}
-
 // GetAvailableMoves собирает словарь всех возможных ходов для текущего игрока.
 func (s *GameSession) GetAvailableMoves() map[string][]string {
 	moves := make(map[string][]string)
@@ -171,13 +193,13 @@ func (s *GameSession) GetAvailableMoves() map[string][]string {
 
 					// ValidateMove делает всю грязную работу (перекрытия, шах королю)
 					if err := s.Mode.ValidateMove(s.Board, s.Turn, from, to); err == nil {
-						validDestinations = append(validDestinations, posToString(to))
+						validDestinations = append(validDestinations, core.FormatSquare(to))
 					}
 				}
 			}
 
 			if len(validDestinations) > 0 {
-				moves[posToString(from)] = validDestinations
+				moves[core.FormatSquare(from)] = validDestinations
 			}
 		}
 	}
@@ -187,6 +209,15 @@ func (s *GameSession) GetAvailableMoves() map[string][]string {
 
 // ExportState создает безопасный снимок текущей игры для отправки клиентам.
 func (s *GameSession) ExportState() GameStateDTO {
+	return s.exportState("")
+}
+
+// ExportStateForPlayer adds fields that are specific to the receiving player.
+func (s *GameSession) ExportStateForPlayer(playerColor core.Color) GameStateDTO {
+	return s.exportState(string(playerColor))
+}
+
+func (s *GameSession) exportState(playerColor string) GameStateDTO {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
@@ -215,11 +246,90 @@ func (s *GameSession) ExportState() GameStateDTO {
 
 	// Упаковываем всё в DTO. Тип Color - это string под капотом, поэтому делаем приведение типа.
 	return GameStateDTO{
+		GameID:        s.ID,
+		PlayerColor:   playerColor,
+		BoardSize:     s.Board.Width,
+		Board:         buildBoardDTO(s.Board),
 		Status:        s.Status,
 		Turn:          string(s.Turn),
 		WhiteTimeLeft: wTime.Milliseconds(),
 		BlackTimeLeft: bTime.Milliseconds(),
 		ValidMoves:    s.GetAvailableMoves(),
+		LastMove:      buildLastMoveDTO(s.Board),
+		CapturedWhite: buildCapturedPiecesDTO(s.Board, core.White),
+		CapturedBlack: buildCapturedPiecesDTO(s.Board, core.Black),
+	}
+}
+
+func buildBoardDTO(board *core.Board) BoardDTO {
+	type positionedPiece struct {
+		pos core.Pos
+		dto PieceDTO
+	}
+
+	pieces := make([]positionedPiece, 0, len(board.Grid))
+	for pos, piece := range board.Grid {
+		pieces = append(pieces, positionedPiece{
+			pos: pos,
+			dto: buildPieceDTO(core.FormatSquare(pos), piece),
+		})
+	}
+
+	sort.Slice(pieces, func(i, j int) bool {
+		if pieces[i].pos.Y == pieces[j].pos.Y {
+			return pieces[i].pos.X < pieces[j].pos.X
+		}
+		return pieces[i].pos.Y < pieces[j].pos.Y
+	})
+
+	dtoPieces := make([]PieceDTO, 0, len(pieces))
+	for _, piece := range pieces {
+		dtoPieces = append(dtoPieces, piece.dto)
+	}
+
+	return BoardDTO{
+		Width:  board.Width,
+		Height: board.Height,
+		Pieces: dtoPieces,
+	}
+}
+
+func buildLastMoveDTO(board *core.Board) *MoveDTO {
+	if len(board.History) == 0 {
+		return nil
+	}
+
+	last := board.History[len(board.History)-1]
+	dto := &MoveDTO{
+		From:  core.FormatSquare(last.From),
+		To:    core.FormatSquare(last.To),
+		Piece: buildPieceDTO(core.FormatSquare(last.To), last.Piece),
+	}
+
+	if last.Captured != nil {
+		captured := buildPieceDTO("", *last.Captured)
+		dto.Captured = &captured
+	}
+
+	return dto
+}
+
+func buildCapturedPiecesDTO(board *core.Board, color core.Color) []PieceDTO {
+	pieces := make([]PieceDTO, 0)
+	for _, move := range board.History {
+		if move.Captured == nil || move.Captured.Color != color {
+			continue
+		}
+		pieces = append(pieces, buildPieceDTO("", *move.Captured))
+	}
+	return pieces
+}
+
+func buildPieceDTO(square string, piece core.Piece) PieceDTO {
+	return PieceDTO{
+		Square: square,
+		Type:   piece.Type,
+		Color:  string(piece.Color),
 	}
 }
 

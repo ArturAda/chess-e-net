@@ -2,9 +2,9 @@ name: Chess API Backend CI
 
 on:
   push:
-    branches: [ "main", "backend", "backend/**" ] # При прямом пуше в main
+    branches: [ "main", "backend", "backend/**", "unification", "backend-game-state" ] # При прямом пуше в main
   pull_request:
-    branches: [ "main", "backend", "backend/**" ] # При открытии PR в ветку main
+    branches: [ "main", "backend", "backend/**", "unification", "backend-game-state" ] # При открытии PR в ветку main
 
 jobs:
   build-and-test:
