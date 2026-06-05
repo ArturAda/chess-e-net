@@ -344,6 +344,8 @@ let currentPlayerColor = null;
 let currentGameId = null;
 let currentValidMoves = {};
 let pendingClassicMove = null;
+let classicSnapbackInProgress = false;
+let queuedClassicPositionUpdate = null;
 let historySortDirection = 'desc';
 let historyFilters = new Set();
 let timerState = null;
@@ -675,6 +677,8 @@ function resetClassicEntry() {
     currentGameId = null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
     capturedByMe = [];
     capturedByOpponent = [];
@@ -771,6 +775,8 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
     currentGameId = null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
 
     matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
@@ -783,6 +789,8 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
             activeMatchRequest = null;
             queuedForMatch = false;
             pendingClassicMove = null;
+            classicSnapbackInProgress = false;
+            queuedClassicPositionUpdate = null;
             clearClassicMoveHighlights();
             stopGameTimer();
             setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
@@ -796,6 +804,8 @@ function cancelMatchmaking() {
     queuedForMatch = false;
     activeMatchRequest = null;
     pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
 }
 
@@ -832,6 +842,8 @@ function handleMatchFound(payload) {
     currentPlayerColor = payload?.player_color || null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
 
     const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
@@ -850,16 +862,17 @@ function handleMatchFound(payload) {
 function handleGameState(gameState) {
     if (!gameState) return;
 
+    const boardSize = boardSizeFromGameState(gameState);
+    const animateConfirmedClassicMove = boardSize === 8 && isConfirmedPendingClassicMove(gameState);
+
     activeRemoteGame = true;
     queuedForMatch = false;
     currentGameState = gameState;
     currentGameId = gameState.game_id || currentGameId;
     currentPlayerColor = gameState.player_color || currentPlayerColor;
     currentValidMoves = normalizeValidMoves(gameState.valid_moves);
-    pendingClassicMove = null;
     clearClassicMoveHighlights();
 
-    const boardSize = boardSizeFromGameState(gameState);
     const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
     const minutes = currentTimeControlMinutes || Math.max(
         Math.ceil((gameState.white_time_left_ms || 0) / 60000),
@@ -868,7 +881,8 @@ function handleGameState(gameState) {
     );
 
     ensureBoardForGameState(boardSize, minutes, mode);
-    applyPositionFromGameState(gameState, boardSize);
+    applyPositionFromGameState(gameState, boardSize, animateConfirmedClassicMove);
+    pendingClassicMove = null;
     applyCapturedPiecesFromGameState(gameState);
     startServerGameTimer(gameState);
 
@@ -889,6 +903,8 @@ function handleSocketProtocolError(payload) {
         currentGameState = null;
         currentValidMoves = {};
         pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
         stopGameTimer();
     }
@@ -896,6 +912,7 @@ function handleSocketProtocolError(payload) {
 
 function handleMoveRejected(payload) {
     pendingClassicMove = null;
+    queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
     setMatchmakingStatus(payload?.message || 'Move rejected.');
 }
@@ -905,6 +922,8 @@ function handleSocketClose() {
         queuedForMatch = false;
         activeMatchRequest = null;
         pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
         stopGameTimer();
         setMatchmakingStatus('Connection closed while searching.');
@@ -941,22 +960,48 @@ function ensureBoardForGameState(boardSize, timeControlMinutes, mode) {
     }
 }
 
-function applyPositionFromGameState(gameState, boardSize) {
+function applyPositionFromGameState(gameState, boardSize, animateClassicMove = false) {
     const pieces = gameState?.board?.pieces || [];
     if (boardSize === 8) {
         const position = backendPiecesToChessboardPosition(pieces);
         if (!board) {
             renderClassicBoard(boardSize, currentTimeControlMinutes || 10, true, false, currentGameMode);
         }
-        board?.position(position, false);
-        paintRenderedClassicSquares();
-        requestAnimationFrame(paintRenderedClassicSquares);
+        if (animateClassicMove && classicSnapbackInProgress) {
+            queuedClassicPositionUpdate = { position, animate: true };
+            return;
+        }
+        queuedClassicPositionUpdate = null;
+        applyClassicBoardPosition(position, animateClassicMove);
         return;
     }
 
     currentCustomPosition = backendPiecesToCustomPosition(pieces, boardSize);
     selectedCustomSquare = null;
     refreshCurrentBoard(false);
+}
+
+function applyClassicBoardPosition(position, animate = false) {
+    board?.position(position, animate);
+    paintRenderedClassicSquares();
+    requestAnimationFrame(paintRenderedClassicSquares);
+}
+
+function flushQueuedClassicPositionUpdate() {
+    const update = queuedClassicPositionUpdate;
+    if (!update) return;
+
+    queuedClassicPositionUpdate = null;
+    applyClassicBoardPosition(update.position, update.animate);
+}
+
+function isConfirmedPendingClassicMove(gameState) {
+    const lastMove = gameState?.last_move;
+    return Boolean(
+        pendingClassicMove
+        && lastMove?.from === pendingClassicMove.from
+        && lastMove?.to === pendingClassicMove.to
+    );
 }
 
 function backendPiecesToChessboardPosition(pieces) {
@@ -1517,6 +1562,8 @@ function bindAccountForm() {
         currentGameId = null;
         currentValidMoves = {};
         pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
         accountEditing = false;
         renderAccountProfile();
@@ -1701,6 +1748,11 @@ function handleClassicDragStart(source, piece) {
         return false;
     }
 
+    if (classicSnapbackInProgress || queuedClassicPositionUpdate) {
+        setMatchmakingStatus('Applying confirmed move.');
+        return false;
+    }
+
     if (currentGameState.status !== 'active') {
         setMatchmakingStatus(currentGameState.status || 'Game is not active.');
         return false;
@@ -1743,8 +1795,11 @@ function handleClassicDrop(source, target, piece) {
         } else {
             ChessSocket.send('MOVE', { from: source, to: target });
         }
+        classicSnapbackInProgress = true;
     } catch (error) {
         pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
         setMatchmakingStatus(error.message || 'Unable to send move.');
     }
 
@@ -1752,7 +1807,9 @@ function handleClassicDrop(source, target, piece) {
 }
 
 function handleClassicSnapbackEnd() {
+    classicSnapbackInProgress = false;
     clearClassicMoveHighlights();
+    flushQueuedClassicPositionUpdate();
 }
 
 function canSubmitClassicMove(source, target, piece) {
@@ -1763,6 +1820,11 @@ function canSubmitClassicMove(source, target, piece) {
 
     if (pendingClassicMove) {
         setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (classicSnapbackInProgress || queuedClassicPositionUpdate) {
+        setMatchmakingStatus('Applying confirmed move.');
         return false;
     }
 
