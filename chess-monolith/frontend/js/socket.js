@@ -159,6 +159,10 @@ const ChessSocket = (() => {
         send('CANCEL_QUEUE');
     }
 
+    function move({ from, to }) {
+        send('MOVE', { from, to });
+    }
+
     function close({ emitClose = true } = {}) {
         if (!socket) return;
 
@@ -181,6 +185,7 @@ const ChessSocket = (() => {
         send,
         joinQueue,
         cancelQueue,
+        move,
         close,
         isOpen
     };
