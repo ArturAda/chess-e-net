@@ -2,6 +2,7 @@ package session
 
 import (
 	"chess-monolith/internal/game/core"
+	"encoding/json"
 	"errors"
 	"sort"
 	"sync"
@@ -60,6 +61,11 @@ type MoveDTO struct {
 	To       string    `json:"to"`
 	Piece    PieceDTO  `json:"piece"`
 	Captured *PieceDTO `json:"captured,omitempty"`
+}
+
+type PersistedGameStateDTO struct {
+	GameStateDTO
+	Moves []MoveDTO `json:"moves"`
 }
 
 // NewSession создает партию, просто передав строку "classic"
@@ -217,6 +223,27 @@ func (s *GameSession) ExportStateForPlayer(playerColor core.Color) GameStateDTO 
 	return s.exportState(string(playerColor))
 }
 
+func (s *GameSession) ExportPersistedState() PersistedGameStateDTO {
+	state := s.ExportState()
+
+	s.Mu.Lock()
+	moves := buildMoveHistoryDTO(s.Board)
+	s.Mu.Unlock()
+
+	return PersistedGameStateDTO{
+		GameStateDTO: state,
+		Moves:        moves,
+	}
+}
+
+func (s *GameSession) ExportPersistedStateJSON() (string, error) {
+	raw, err := json.Marshal(s.ExportPersistedState())
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
+}
+
 func (s *GameSession) exportState(playerColor string) GameStateDTO {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
@@ -312,6 +339,23 @@ func buildLastMoveDTO(board *core.Board) *MoveDTO {
 	}
 
 	return dto
+}
+
+func buildMoveHistoryDTO(board *core.Board) []MoveDTO {
+	moves := make([]MoveDTO, 0, len(board.History))
+	for _, move := range board.History {
+		dto := MoveDTO{
+			From:  core.FormatSquare(move.From),
+			To:    core.FormatSquare(move.To),
+			Piece: buildPieceDTO(core.FormatSquare(move.To), move.Piece),
+		}
+		if move.Captured != nil {
+			captured := buildPieceDTO("", *move.Captured)
+			dto.Captured = &captured
+		}
+		moves = append(moves, dto)
+	}
+	return moves
 }
 
 func buildCapturedPiecesDTO(board *core.Board, color core.Color) []PieceDTO {

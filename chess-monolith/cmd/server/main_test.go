@@ -23,10 +23,16 @@ func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
 func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 	return nil
 }
+func (d *DummyUserRepository) GetOrCreateRating(_ uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
+	return &users.UserRating{Rating: users.DefaultRating}, nil
+}
+func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
+	return 1216, 1184, nil
+}
 
 type DummyQueueManager struct{}
 
-func (d *DummyQueueManager) AddPlayer(_ *ws.Client, _ string, _ bool, _ time.Duration) error {
+func (d *DummyQueueManager) AddPlayer(_ *ws.Client, _ string, _ int, _ bool, _ time.Duration) error {
 	return nil
 }
 func (d *DummyQueueManager) RemovePlayer(_ *ws.Client) {}

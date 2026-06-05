@@ -2,7 +2,6 @@ package matchmaking
 
 import (
 	"chess-monolith/internal/users"
-	"chess-monolith/pkg/elo"
 	"fmt"
 	"log"
 	"sort"
@@ -17,9 +16,10 @@ import (
 	"github.com/google/uuid"
 )
 
-// QueueKey позволяет группировать игроков по режиму И лимиту времени
+// QueueKey позволяет группировать игроков по режиму, размеру доски и лимиту времени.
 type QueueKey struct {
 	Mode      string
+	BoardSize int
 	TimeLimit time.Duration
 }
 
@@ -44,25 +44,38 @@ func NewMatchmaker(registry *core.Registry, repo game.Repository, userRepo users
 }
 
 // AddPlayer принимает параметр isRanked (true - на рейтинг, false - обычная)
-func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, isRanked bool, timeLimit time.Duration) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
+func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) error {
 	if _, err := m.registry.Get(mode); err != nil {
 		log.Printf("User %s requested unknown mode: %s", client.UserID, mode)
 		return ws.NewProtocolError(ws.ErrorCodeUnknownMode, fmt.Sprintf("Unknown mode: %s", mode), true)
 	}
 
-	m.removePlayerUnsafe(client) // Чтобы игрок не стоял в двух очередях сразу
+	boardSize = normalizeBoardSize(mode, boardSize)
+	if expectedBoardSize := ws.BoardSizeForMode(mode); expectedBoardSize != 0 && boardSize != expectedBoardSize {
+		return ws.NewProtocolError(ws.ErrorCodeInvalidMessage, "board_size does not match mode", true)
+	}
 
-	key := QueueKey{Mode: mode, TimeLimit: timeLimit}
+	key := QueueKey{Mode: mode, BoardSize: boardSize, TimeLimit: timeLimit}
+
+	if isRanked {
+		rating, err := m.loadScopedRating(client, key)
+		if err != nil {
+			return err
+		}
+		client.Rating = rating
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.removePlayerUnsafe(client) // Чтобы игрок не стоял в двух очередях сразу
 
 	if isRanked {
 		m.rankedQueues[key] = append(m.rankedQueues[key], client)
-		log.Printf("User %s in RANKED queue for %s (%v)", client.UserID, mode, timeLimit)
+		log.Printf("User %s in RANKED queue for %s %dx%d (%v), rating %d", client.UserID, mode, boardSize, boardSize, timeLimit, client.Rating)
 	} else {
 		m.casualQueues[key] = append(m.casualQueues[key], client)
-		log.Printf("User %s in CASUAL queue for %s (%v)", client.UserID, mode, timeLimit)
+		log.Printf("User %s in CASUAL queue for %s %dx%d (%v)", client.UserID, mode, boardSize, boardSize, timeLimit)
 	}
 
 	return nil
@@ -107,7 +120,7 @@ func (m *Matchmaker) Run() {
 				p1, p2 := queue[0], queue[1]
 				m.casualQueues[key] = queue[2:]
 				queue = m.casualQueues[key]
-				m.startGame(p1, p2, key.Mode, false, key.TimeLimit)
+				m.startGame(p1, p2, key.Mode, key.BoardSize, false, key.TimeLimit)
 			}
 		}
 
@@ -122,7 +135,7 @@ func (m *Matchmaker) Run() {
 				for i := 0; i < len(queue); {
 					if i+1 < len(queue) && abs(queue[i+1].Rating-queue[i].Rating) <= 100 {
 						p1, p2 := queue[i], queue[i+1]
-						m.startGame(p1, p2, key.Mode, true, key.TimeLimit)
+						m.startGame(p1, p2, key.Mode, key.BoardSize, true, key.TimeLimit)
 						i += 2
 					} else {
 						remaining = append(remaining, queue[i])
@@ -145,7 +158,7 @@ func abs(x int) int {
 }
 
 // startGame связывает двух клиентов и запускает таймеры
-func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanked bool, timeLimit time.Duration) {
+func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) {
 	// Используем динамический timeLimit
 	sess, err := session.NewSession(m.registry, mode, timeLimit)
 	if err != nil {
@@ -156,13 +169,31 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 	p1UUID, _ := uuid.Parse(player1.UserID)
 	p2UUID, _ := uuid.Parse(player2.UserID)
 
+	gameID := uuid.New()
+	sess.ID = gameID.String()
+
+	actualBoardSize := boardSize
+	if sess.Board != nil && sess.Board.Width > 0 {
+		actualBoardSize = sess.Board.Width
+	}
+
+	initialBoardState, err := sess.ExportPersistedStateJSON()
+	if err != nil {
+		log.Printf("Failed to encode initial board state: %v", err)
+		initialBoardState = "{}"
+	}
+
 	newDBGame := &game.Game{
-		WhiteID:  p1UUID,
-		BlackID:  p2UUID,
-		Mode:     mode,
-		IsRanked: isRanked,
-		Status:   "active",
-		Turn:     "white",
+		ID:          gameID,
+		WhiteID:     p1UUID,
+		BlackID:     p2UUID,
+		Mode:        mode,
+		BoardSize:   actualBoardSize,
+		TimeLimitMs: timeLimit.Milliseconds(),
+		IsRanked:    isRanked,
+		Status:      "active",
+		Turn:        "white",
+		BoardState:  initialBoardState,
 	}
 
 	if err := m.repo.CreateGame(newDBGame); err != nil {
@@ -172,7 +203,6 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 		return
 	}
 
-	sess.ID = newDBGame.ID.String()
 	sess.IsRanked = isRanked
 
 	player1.ActiveGame = sess
@@ -185,7 +215,13 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 
 	sess.OnGameEnd = func(finalStatus string) {
 		parsedGameID, _ := uuid.Parse(sess.ID)
-		if err := m.repo.UpdateGame(parsedGameID, "{}", finalStatus, string(sess.Turn)); err != nil {
+		boardState, err := sess.ExportPersistedStateJSON()
+		if err != nil {
+			log.Printf("Failed to encode final board state for game %s: %v", sess.ID, err)
+			boardState = "{}"
+		}
+
+		if err := m.repo.UpdateGame(parsedGameID, boardState, finalStatus, string(sess.Turn)); err != nil {
 			log.Printf("Failed to update game %s: %v", sess.ID, err)
 		} else {
 			log.Printf("Game %s saved with status: %s", sess.ID, finalStatus)
@@ -201,14 +237,21 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 				p1Score = 0.0 // Черные победили
 			}
 
-			newR1, newR2 := elo.Calculate(player1.Rating, player2.Rating, p1Score)
 			p1UUID, _ := uuid.Parse(player1.UserID)
 			p2UUID, _ := uuid.Parse(player2.UserID)
 
-			if err := m.userRepo.UpdateRatings(p1UUID, p2UUID, newR1, newR2); err == nil {
+			scope := users.RatingScope{
+				Mode:        mode,
+				BoardSize:   actualBoardSize,
+				TimeLimitMs: timeLimit.Milliseconds(),
+			}
+			newR1, newR2, err := m.userRepo.ApplyRatingResult(p1UUID, p2UUID, scope, p1Score)
+			if err == nil {
 				player1.Rating = newR1
 				player2.Rating = newR2
 				log.Printf("Game %s ELO updated: %s (%d), %s (%d)", sess.ID, player1.UserID, newR1, player2.UserID, newR2)
+			} else {
+				log.Printf("Failed to update scoped ELO for game %s: %v", sess.ID, err)
 			}
 		}
 
@@ -229,4 +272,37 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 
 	log.Printf("Game started: %s (White) vs %s (Black) | %s | Ranked: %v | Time: %v",
 		player1.UserID, player2.UserID, mode, isRanked, timeLimit)
+}
+
+func normalizeBoardSize(mode string, boardSize int) int {
+	if boardSize > 0 {
+		return boardSize
+	}
+	if inferred := ws.BoardSizeForMode(mode); inferred > 0 {
+		return inferred
+	}
+	return 8
+}
+
+func (m *Matchmaker) loadScopedRating(client *ws.Client, key QueueKey) (int, error) {
+	if m.userRepo == nil {
+		return 0, ws.NewProtocolError(ws.ErrorCodeQueueFailed, "Rating repository is not available", false)
+	}
+
+	userID, err := uuid.Parse(client.UserID)
+	if err != nil {
+		return 0, ws.NewProtocolError(ws.ErrorCodeInvalidMessage, "Invalid user id", false)
+	}
+
+	rating, err := m.userRepo.GetOrCreateRating(userID, users.RatingScope{
+		Mode:        key.Mode,
+		BoardSize:   key.BoardSize,
+		TimeLimitMs: key.TimeLimit.Milliseconds(),
+	})
+	if err != nil {
+		log.Printf("Failed to load scoped rating for user %s: %v", client.UserID, err)
+		return 0, ws.NewProtocolError(ws.ErrorCodeQueueFailed, "Failed to load rating", true)
+	}
+
+	return rating.Rating, nil
 }

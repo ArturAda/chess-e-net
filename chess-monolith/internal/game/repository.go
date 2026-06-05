@@ -1,6 +1,7 @@
 package game
 
 import (
+	"errors"
 	"log"
 
 	"github.com/google/uuid"
@@ -10,6 +11,8 @@ import (
 type Repository interface {
 	CreateGame(game *Game) error
 	GetGame(id uuid.UUID) (*Game, error)
+	GetGameForUser(id, userID uuid.UUID) (*Game, error)
+	ListGamesForUser(userID uuid.UUID) ([]Game, error)
 	UpdateGame(id uuid.UUID, boardStateJSON, status, turn string) error
 }
 
@@ -32,7 +35,38 @@ func (r *repository) CreateGame(game *Game) error {
 func (r *repository) GetGame(id uuid.UUID) (*Game, error) {
 	var game Game
 	err := r.db.First(&game, "id = ?", id).Error
-	return &game, err
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrGameNotFound
+		}
+		return nil, ErrDatabase
+	}
+	return &game, nil
+}
+
+func (r *repository) GetGameForUser(id, userID uuid.UUID) (*Game, error) {
+	var game Game
+	err := r.db.
+		Where("id = ? AND (white_id = ? OR black_id = ?)", id, userID, userID).
+		First(&game).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrGameNotFound
+		}
+		return nil, ErrDatabase
+	}
+	return &game, nil
+}
+
+func (r *repository) ListGamesForUser(userID uuid.UUID) ([]Game, error) {
+	var games []Game
+	if err := r.db.
+		Where("white_id = ? OR black_id = ?", userID, userID).
+		Order("created_at DESC").
+		Find(&games).Error; err != nil {
+		return nil, ErrDatabase
+	}
+	return games, nil
 }
 
 func (r *repository) UpdateGame(id uuid.UUID, boardStateJSON, status, turn string) error {
