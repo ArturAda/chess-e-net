@@ -3,6 +3,7 @@ package matchmaking
 import (
 	"chess-monolith/internal/users"
 	"chess-monolith/pkg/elo"
+	"fmt"
 	"log"
 	"sort"
 	"sync"
@@ -43,13 +44,13 @@ func NewMatchmaker(registry *core.Registry, repo game.Repository, userRepo users
 }
 
 // AddPlayer принимает параметр isRanked (true - на рейтинг, false - обычная)
-func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, isRanked bool, timeLimit time.Duration) {
+func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, isRanked bool, timeLimit time.Duration) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if _, err := m.registry.Get(mode); err != nil {
 		log.Printf("User %s requested unknown mode: %s", client.UserID, mode)
-		return
+		return ws.NewProtocolError(ws.ErrorCodeUnknownMode, fmt.Sprintf("Unknown mode: %s", mode), true)
 	}
 
 	m.removePlayerUnsafe(client) // Чтобы игрок не стоял в двух очередях сразу
@@ -63,6 +64,8 @@ func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, isRanked bool, ti
 		m.casualQueues[key] = append(m.casualQueues[key], client)
 		log.Printf("User %s in CASUAL queue for %s (%v)", client.UserID, mode, timeLimit)
 	}
+
+	return nil
 }
 
 func (m *Matchmaker) removePlayerUnsafe(client *ws.Client) {
@@ -164,8 +167,8 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 
 	if err := m.repo.CreateGame(newDBGame); err != nil {
 		log.Printf("Failed to create game in DB: %v", err)
-		player1.Send <- []byte(`{"type":"ERROR", "payload":{"message":"Failed to start game due to server error"}}`)
-		player2.Send <- []byte(`{"type":"ERROR", "payload":{"message":"Failed to start game due to server error"}}`)
+		player1.SendError(ws.ErrorCodeInternal, "Failed to start game due to server error", false)
+		player2.SendError(ws.ErrorCodeInternal, "Failed to start game due to server error", false)
 		return
 	}
 
@@ -219,6 +222,8 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, isRanke
 
 	go sess.RunTimer(onTimeout)
 
+	player1.SendMatchFound(player2, mode, isRanked, timeLimit)
+	player2.SendMatchFound(player1, mode, isRanked, timeLimit)
 	player1.SendGameState()
 	player2.SendGameState()
 

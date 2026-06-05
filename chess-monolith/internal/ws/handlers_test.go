@@ -26,11 +26,23 @@ func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 	return nil
 }
 
-type DummyQueueManager struct{}
-
-func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ bool, _ time.Duration) {
+type DummyQueueManager struct {
+	AddErr  error
+	Added   chan struct{}
+	Removed chan struct{}
 }
-func (d *DummyQueueManager) RemovePlayer(_ *Client) {}
+
+func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ bool, _ time.Duration) error {
+	if d.Added != nil {
+		d.Added <- struct{}{}
+	}
+	return d.AddErr
+}
+func (d *DummyQueueManager) RemovePlayer(_ *Client) {
+	if d.Removed != nil {
+		d.Removed <- struct{}{}
+	}
+}
 
 func TestServeWS_NoToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)

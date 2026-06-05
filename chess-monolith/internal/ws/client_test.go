@@ -10,11 +10,16 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // mockServeWS - заглушка хендлера для тестов без JWT авторизации,
 // чтобы сфокусироваться только на работе клиента (ReadPump / WritePump)
 func mockServeWS(hub *Hub) http.HandlerFunc {
+	return mockServeWSWithQueueManager(hub, &DummyQueueManager{})
+}
+
+func mockServeWSWithQueueManager(hub *Hub, qm QueueManager) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		conn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -26,13 +31,22 @@ func mockServeWS(hub *Hub) http.HandlerFunc {
 			Conn:         conn,
 			Send:         make(chan []byte, 256),
 			UserID:       "test_user_id",
-			QueueManager: &DummyQueueManager{},
+			QueueManager: qm,
 		}
 		client.Hub.Register <- client
 
 		go client.WritePump()
 		client.ReadPump()
 	}
+}
+
+func readWSMessage(t *testing.T, conn *websocket.Conn) Message {
+	t.Helper()
+
+	require.NoError(t, conn.SetReadDeadline(time.Now().Add(2*time.Second)))
+	var msg Message
+	require.NoError(t, conn.ReadJSON(&msg))
+	return msg
 }
 
 func TestClient_WritePump(t *testing.T) {
@@ -145,15 +159,15 @@ func TestClient_ReadPump_ValidJSON(t *testing.T) {
 	// Формируем сообщение, которое соответствует структуре WSMessage
 	wsMsg := Message{
 		Type:    "JOIN_QUEUE",
-		Payload: json.RawMessage(`{"mode": "blitz"}`),
+		Payload: json.RawMessage(`{"mode": "classic"}`),
 	}
 
 	// Клиент пишет сообщение в сокет
 	err = conn.WriteJSON(wsMsg)
 	assert.NoError(t, err)
 
-	// Даем ReadPump время прочитать и обработать (выведет лог)
-	time.Sleep(50 * time.Millisecond)
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeQueueJoined, resp.Type)
 
 	// Проверяем, что соединение все еще живо и клиент не удален из-за ошибки
 	assert.Equal(t, 1, hub.Len())
@@ -180,8 +194,13 @@ func TestClient_ReadPump_InvalidJSON(t *testing.T) {
 	err = conn.WriteMessage(websocket.TextMessage, []byte("this is not a valid json!!!"))
 	assert.NoError(t, err)
 
-	// Даем ReadPump время попытаться распарсить сообщение
-	time.Sleep(50 * time.Millisecond)
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeError, resp.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, ErrorCodeInvalidMessage, payload.Code)
+	assert.True(t, payload.Recoverable)
 
 	// Проверяем, что соединение не упало, и клиент все еще в хабе
 	assert.Equal(t, 1, hub.Len(), "Client should remain connected after sending invalid JSON")
@@ -239,7 +258,8 @@ func TestClient_ReadPump_JoinQueue(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
 
-	server := httptest.NewServer(mockServeWS(hub))
+	qm := &DummyQueueManager{Added: make(chan struct{}, 1)}
+	server := httptest.NewServer(mockServeWSWithQueueManager(hub, qm))
 	defer server.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
@@ -259,9 +279,117 @@ func TestClient_ReadPump_JoinQueue(t *testing.T) {
 	err = conn.WriteJSON(wsMsg)
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-qm.Added:
+	case <-time.After(2 * time.Second):
+		t.Fatal("JOIN_QUEUE did not call AddPlayer")
+	}
+
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeQueueJoined, resp.Type)
+
+	var payload QueueJoinedPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, "classic", payload.Mode)
+	assert.Equal(t, 8, payload.BoardSize)
+	assert.True(t, payload.IsRanked)
+	assert.Equal(t, 10, payload.TimeLimitMinutes)
 
 	assert.Equal(t, 1, hub.Len(), "Client should still be connected after valid JOIN_QUEUE")
+}
+
+func TestClient_ReadPump_JoinQueueError(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	qm := &DummyQueueManager{
+		AddErr: NewProtocolError(ErrorCodeUnknownMode, "Unknown mode: blitz", true),
+	}
+	server := httptest.NewServer(mockServeWSWithQueueManager(hub, qm))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	wsMsg := Message{
+		Type:    "JOIN_QUEUE",
+		Payload: json.RawMessage(`{"mode": "blitz", "is_ranked": true, "time_limit": 10}`),
+	}
+
+	err = conn.WriteJSON(wsMsg)
+	assert.NoError(t, err)
+
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeError, resp.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, ErrorCodeUnknownMode, payload.Code)
+	assert.Equal(t, "Unknown mode: blitz", payload.Message)
+	assert.True(t, payload.Recoverable)
+}
+
+func TestClient_ReadPump_CancelQueue(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	qm := &DummyQueueManager{Removed: make(chan struct{}, 1)}
+	server := httptest.NewServer(mockServeWSWithQueueManager(hub, qm))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	err = conn.WriteJSON(Message{Type: "CANCEL_QUEUE"})
+	assert.NoError(t, err)
+
+	select {
+	case <-qm.Removed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("CANCEL_QUEUE did not call RemovePlayer")
+	}
+
+	assert.Equal(t, 1, hub.Len(), "Client should still be connected after CANCEL_QUEUE")
+}
+
+func TestClient_ReadPump_UnknownMessage(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	server := httptest.NewServer(mockServeWS(hub))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	err = conn.WriteJSON(Message{Type: "SOMETHING_ELSE"})
+	assert.NoError(t, err)
+
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeError, resp.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, ErrorCodeUnknownMessage, payload.Code)
+	assert.True(t, payload.Recoverable)
 }
 
 func TestClient_ReadPump_Move(t *testing.T) {
@@ -282,12 +410,20 @@ func TestClient_ReadPump_Move(t *testing.T) {
 
 	wsMsg := Message{
 		Type:    "MOVE",
-		Payload: json.RawMessage(`{"from": {"X": 4, "Y": 1}, "to": {"X": 4, "Y": 3}}`),
+		Payload: json.RawMessage(`{"from": "e2", "to": "e4"}`),
 	}
 
 	err = conn.WriteJSON(wsMsg)
 	assert.NoError(t, err)
 
-	time.Sleep(50 * time.Millisecond)
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeMoveRejected, resp.Type)
+
+	var payload MoveRejectedPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, ErrorCodeNotInGame, payload.Code)
+	assert.Equal(t, "e2", payload.From)
+	assert.Equal(t, "e4", payload.To)
+
 	assert.Equal(t, 1, hub.Len(), "Client should survive a MOVE payload parse")
 }

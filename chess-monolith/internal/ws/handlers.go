@@ -38,8 +38,10 @@ func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string, qm QueueMana
 		parsedUUID, _ := uuid.Parse(userID)
 		user, err := userRepo.GetUserByID(parsedUUID) // Предполагаем, что такой метод есть в репозитории
 		rating := 1200                                // Дефолтное значение
+		username := ""
 		if err == nil && user != nil {
 			rating = user.Rating
+			username = user.Username
 		}
 
 		// Апгрейдим HTTP в WebSocket
@@ -54,6 +56,7 @@ func ServeWS(hub *Hub, userRepo users.Repository, jwtSecret string, qm QueueMana
 			Conn:         conn,
 			Send:         make(chan []byte, 256),
 			UserID:       userID,
+			Username:     username,
 			Rating:       rating,
 			QueueManager: qm,
 		}
