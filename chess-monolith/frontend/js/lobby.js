@@ -675,6 +675,7 @@ function resetClassicEntry() {
     currentGameId = null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
     capturedByMe = [];
     capturedByOpponent = [];
     emojiMessages = [];
@@ -737,7 +738,8 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
             position: preservedClassicPosition || 'start',
             pieceTheme: pieceTheme,
             onDragStart: handleClassicDragStart,
-            onDrop: handleClassicDrop
+            onDrop: handleClassicDrop,
+            onSnapbackEnd: handleClassicSnapbackEnd
         });
         paintRenderedClassicSquares();
         requestAnimationFrame(paintRenderedClassicSquares);
@@ -769,6 +771,7 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
     currentGameId = null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
 
     matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
         .then(result => {
@@ -780,6 +783,7 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
             activeMatchRequest = null;
             queuedForMatch = false;
             pendingClassicMove = null;
+            clearClassicMoveHighlights();
             stopGameTimer();
             setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
         });
@@ -792,6 +796,7 @@ function cancelMatchmaking() {
     queuedForMatch = false;
     activeMatchRequest = null;
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
 }
 
 function isCurrentMatchRequest(mode, boardSize, timeControlMinutes) {
@@ -827,6 +832,7 @@ function handleMatchFound(payload) {
     currentPlayerColor = payload?.player_color || null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
 
     const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
     const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes || 10;
@@ -851,6 +857,7 @@ function handleGameState(gameState) {
     currentPlayerColor = gameState.player_color || currentPlayerColor;
     currentValidMoves = normalizeValidMoves(gameState.valid_moves);
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
 
     const boardSize = boardSizeFromGameState(gameState);
     const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
@@ -882,12 +889,14 @@ function handleSocketProtocolError(payload) {
         currentGameState = null;
         currentValidMoves = {};
         pendingClassicMove = null;
+        clearClassicMoveHighlights();
         stopGameTimer();
     }
 }
 
 function handleMoveRejected(payload) {
     pendingClassicMove = null;
+    clearClassicMoveHighlights();
     setMatchmakingStatus(payload?.message || 'Move rejected.');
 }
 
@@ -896,6 +905,7 @@ function handleSocketClose() {
         queuedForMatch = false;
         activeMatchRequest = null;
         pendingClassicMove = null;
+        clearClassicMoveHighlights();
         stopGameTimer();
         setMatchmakingStatus('Connection closed while searching.');
     }
@@ -1507,6 +1517,7 @@ function bindAccountForm() {
         currentGameId = null;
         currentValidMoves = {};
         pendingClassicMove = null;
+        clearClassicMoveHighlights();
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -1678,6 +1689,8 @@ function pieceTheme(piece) {
 }
 
 function handleClassicDragStart(source, piece) {
+    clearClassicMoveHighlights();
+
     if (!isClassicBackendGameReady()) {
         setMatchmakingStatus('Waiting for game state from backend.');
         return false;
@@ -1708,10 +1721,13 @@ function handleClassicDragStart(source, piece) {
         return false;
     }
 
+    showClassicMoveHighlights(source, piece);
     return true;
 }
 
 function handleClassicDrop(source, target, piece) {
+    clearClassicMoveHighlights();
+
     if (!target || target === 'offboard' || source === target) return 'snapback';
 
     if (!canSubmitClassicMove(source, target, piece)) {
@@ -1733,6 +1749,10 @@ function handleClassicDrop(source, target, piece) {
     }
 
     return 'snapback';
+}
+
+function handleClassicSnapbackEnd() {
+    clearClassicMoveHighlights();
 }
 
 function canSubmitClassicMove(source, target, piece) {
@@ -1796,6 +1816,39 @@ function frontendColorCode(color) {
 
 function validTargetsForSquare(square) {
     return Array.isArray(currentValidMoves?.[square]) ? currentValidMoves[square] : [];
+}
+
+function showClassicMoveHighlights(source, piece) {
+    const sourceSquare = classicSquareElement(source);
+    sourceSquare?.classList.add('classic-move-source');
+
+    validTargetsForSquare(source).forEach(target => {
+        const targetSquare = classicSquareElement(target);
+        if (!targetSquare) return;
+
+        const targetClass = isClassicCaptureTarget(piece, target)
+            ? 'classic-capture-target'
+            : 'classic-move-target';
+        targetSquare.classList.add(targetClass);
+    });
+}
+
+function clearClassicMoveHighlights() {
+    document
+        .querySelectorAll('#myBoard .classic-move-source, #myBoard .classic-move-target, #myBoard .classic-capture-target')
+        .forEach(square => {
+            square.classList.remove('classic-move-source', 'classic-move-target', 'classic-capture-target');
+        });
+}
+
+function classicSquareElement(square) {
+    if (!square) return null;
+    return document.querySelector(`#myBoard .square-${square}`);
+}
+
+function isClassicCaptureTarget(piece, target) {
+    const targetPiece = board?.position?.()?.[target];
+    return Boolean(piece && targetPiece && targetPiece[0] !== piece[0]);
 }
 
 function trackCapture(movingPiece, capturedPiece) {
