@@ -65,12 +65,12 @@
             <form id="account-login-form" class="account-form account-login-form hidden">
                 <h3>Login</h3>
                 <label>
-                    Username
-                    <input id="account-login-username" type="text" maxlength="18" placeholder="CheesePlayer" autocomplete="username">
+                    Email
+                    <input id="account-login-email" type="email" placeholder="player@example.com" autocomplete="email" required>
                 </label>
                 <label>
                     Password
-                    <input id="account-login-password" type="password" maxlength="40" placeholder="Password" autocomplete="current-password">
+                    <input id="account-login-password" type="password" minlength="6" maxlength="40" placeholder="Password" autocomplete="current-password" required>
                 </label>
                 <button class="mini-action-btn" type="submit">Login</button>
             </form>
@@ -78,15 +78,15 @@
                 <h3 id="account-form-title">Register</h3>
                 <label>
                     Username
-                    <input id="account-username" type="text" maxlength="18" placeholder="CheesePlayer" autocomplete="nickname" required>
+                    <input id="account-username" type="text" minlength="3" maxlength="18" placeholder="CheesePlayer" autocomplete="nickname" required>
                 </label>
                 <label>
                     Email
-                    <input id="account-email" type="email" placeholder="player@example.com" autocomplete="email">
+                    <input id="account-email" type="email" placeholder="player@example.com" autocomplete="email" required>
                 </label>
                 <label>
                     Password
-                    <input id="account-password" type="password" maxlength="40" placeholder="Password" autocomplete="new-password" required>
+                    <input id="account-password" type="password" minlength="6" maxlength="40" placeholder="Password" autocomplete="new-password" required>
                 </label>
                 <button id="account-submit-btn" class="mini-action-btn" type="submit">Register</button>
             </form>
@@ -105,16 +105,16 @@
                     <span>Name</span>
                     <strong id="account-profile-name"></strong>
                 </div>
-                <button id="account-password-toggle" class="account-profile-row account-password-row" type="button">
-                    <span>Password</span>
-                    <strong id="account-profile-password"></strong>
-                </button>
+                <div class="account-profile-row">
+                    <span>Email</span>
+                    <strong id="account-profile-email"></strong>
+                </div>
                 <div class="account-profile-row">
                     <span>Rating</span>
                     <strong id="account-profile-rating">-</strong>
                 </div>
             </div>
-            <button id="account-edit-btn" class="mini-action-btn" type="button">Edit Profile</button>
+            <button id="account-refresh-btn" class="mini-action-btn" type="button">Refresh Profile</button>
             <button id="account-logout-btn" class="mini-action-btn account-logout-btn" type="button">Log Out</button>
         </section>
         <p id="account-message" class="settings-message" aria-live="polite"></p>
@@ -302,6 +302,7 @@
 
     <script src="js/jquery-3.6.0.min.js"></script>
     <script src="js/chessboard-1.0.0.min.js"></script>
+    <script src="js/api.js"></script>
     <script src="js/lobby.js"></script>
 </body>
 </html>
