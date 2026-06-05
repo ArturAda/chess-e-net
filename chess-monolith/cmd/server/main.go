@@ -51,7 +51,12 @@ func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Reposit
 
 	router.GET("/ws", ws.ServeWS(hub, userRepo, jwtSecret, qm))
 
-	userHandler.SetupRoutes(router)
+	if userHandler != nil {
+		userHandler.SetupRoutes(router)
+	}
+	if gameRepo != nil && userRepo != nil {
+		game.NewHandler(gameRepo, userRepo, jwtSecret).SetupRoutes(router)
+	}
 
 	return router
 }

@@ -1,11 +1,13 @@
 package users
 
 import (
+	"chess-monolith/pkg/elo"
 	"errors"
 	"strings"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Repository описывает контракт работы с БД
@@ -14,6 +16,8 @@ type Repository interface {
 	GetUserByEmail(email string) (*User, error)
 	GetUserByID(id uuid.UUID) (*User, error)
 	UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error
+	GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error)
+	ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingScope, user1Score float64) (int, int, error)
 }
 
 type repository struct {
@@ -76,4 +80,138 @@ func (r *repository) UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRa
 		}
 		return nil
 	})
+}
+
+func (r *repository) GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error) {
+	return r.getOrCreateRating(r.db, userID, normalizeRatingScope(scope))
+}
+
+func (r *repository) ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingScope, user1Score float64) (int, int, error) {
+	scope = normalizeRatingScope(scope)
+
+	var newRating1 int
+	var newRating2 int
+
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		if _, err := r.getOrCreateRating(tx, user1ID, scope); err != nil {
+			return err
+		}
+		if _, err := r.getOrCreateRating(tx, user2ID, scope); err != nil {
+			return err
+		}
+
+		ratings, err := r.getRatingsForUpdate(tx, []uuid.UUID{user1ID, user2ID}, scope)
+		if err != nil {
+			return err
+		}
+
+		rating1, ok := ratings[user1ID]
+		if !ok {
+			return ErrDatabase
+		}
+		rating2, ok := ratings[user2ID]
+		if !ok {
+			return ErrDatabase
+		}
+
+		newRating1, newRating2 = elo.Calculate(rating1.Rating, rating2.Rating, user1Score)
+
+		if err := tx.Model(&UserRating{}).
+			Where("id = ?", rating1.ID).
+			Updates(map[string]any{
+				"rating":       newRating1,
+				"games_played": gorm.Expr("games_played + ?", 1),
+			}).Error; err != nil {
+			return ErrDatabase
+		}
+
+		if err := tx.Model(&UserRating{}).
+			Where("id = ?", rating2.ID).
+			Updates(map[string]any{
+				"rating":       newRating2,
+				"games_played": gorm.Expr("games_played + ?", 1),
+			}).Error; err != nil {
+			return ErrDatabase
+		}
+
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return newRating1, newRating2, nil
+}
+
+func (r *repository) getOrCreateRating(db *gorm.DB, userID uuid.UUID, scope RatingScope) (*UserRating, error) {
+	rating := UserRating{
+		UserID:      userID,
+		Mode:        scope.Mode,
+		BoardSize:   scope.BoardSize,
+		TimeLimitMs: scope.TimeLimitMs,
+		Rating:      DefaultRating,
+	}
+
+	err := db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{
+			{Name: "user_id"},
+			{Name: "mode"},
+			{Name: "board_size"},
+			{Name: "time_limit_ms"},
+		},
+		DoNothing: true,
+	}).Create(&rating).Error
+	if err != nil {
+		return nil, ErrDatabase
+	}
+
+	var existing UserRating
+	err = db.
+		Where("user_id = ? AND mode = ? AND board_size = ? AND time_limit_ms = ?",
+			userID, scope.Mode, scope.BoardSize, scope.TimeLimitMs).
+		First(&existing).Error
+	if err != nil {
+		return nil, ErrDatabase
+	}
+
+	return &existing, nil
+}
+
+func (r *repository) getRatingsForUpdate(db *gorm.DB, userIDs []uuid.UUID, scope RatingScope) (map[uuid.UUID]UserRating, error) {
+	query := db.
+		Where("user_id IN ? AND mode = ? AND board_size = ? AND time_limit_ms = ?",
+			userIDs, scope.Mode, scope.BoardSize, scope.TimeLimitMs).
+		Order("user_id ASC")
+
+	if db.Dialector.Name() == "postgres" {
+		query = query.Clauses(clause.Locking{Strength: "UPDATE"})
+	}
+
+	var rows []UserRating
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, ErrDatabase
+	}
+	if len(rows) != len(userIDs) {
+		return nil, ErrDatabase
+	}
+
+	result := make(map[uuid.UUID]UserRating, len(rows))
+	for _, row := range rows {
+		result[row.UserID] = row
+	}
+
+	return result, nil
+}
+
+func normalizeRatingScope(scope RatingScope) RatingScope {
+	if scope.Mode == "" {
+		scope.Mode = "classic"
+	}
+	if scope.BoardSize <= 0 {
+		scope.BoardSize = 8
+	}
+	if scope.TimeLimitMs <= 0 {
+		scope.TimeLimitMs = int64((10 * 60) * 1000)
+	}
+	return scope
 }

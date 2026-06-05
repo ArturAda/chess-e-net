@@ -2,6 +2,7 @@ package game
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -72,6 +73,86 @@ func TestRepository_UpdateGame(t *testing.T) {
 
 	t.Run("Update Non-existent Game", func(t *testing.T) {
 		err := repo.UpdateGame(uuid.New(), `{"Grid": {}}`, "checkmate", "black")
+		assert.ErrorIs(t, err, ErrGameNotFound)
+	})
+}
+
+func TestRepository_ListGamesForUser(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+
+	userID := uuid.New()
+	opponentID := uuid.New()
+	otherUserID := uuid.New()
+
+	oldGame := &Game{
+		WhiteID:    userID,
+		BlackID:    opponentID,
+		Mode:       "classic",
+		IsRanked:   true,
+		Status:     "white_won",
+		Turn:       "black",
+		BoardState: `{"moves":[]}`,
+		CreatedAt:  time.Now().Add(-2 * time.Hour),
+	}
+	newGame := &Game{
+		WhiteID:    opponentID,
+		BlackID:    userID,
+		Mode:       "classic",
+		Status:     "active",
+		Turn:       "white",
+		BoardState: `{"moves":[]}`,
+		CreatedAt:  time.Now(),
+	}
+	otherGame := &Game{
+		WhiteID:    otherUserID,
+		BlackID:    uuid.New(),
+		Mode:       "classic",
+		Status:     "active",
+		Turn:       "white",
+		BoardState: `{"moves":[]}`,
+		CreatedAt:  time.Now().Add(time.Hour),
+	}
+
+	require.NoError(t, repo.CreateGame(oldGame))
+	require.NoError(t, repo.CreateGame(newGame))
+	require.NoError(t, repo.CreateGame(otherGame))
+
+	games, err := repo.ListGamesForUser(userID)
+	require.NoError(t, err)
+	require.Len(t, games, 2)
+	assert.Equal(t, newGame.ID, games[0].ID)
+	assert.Equal(t, oldGame.ID, games[1].ID)
+	assert.True(t, games[1].IsRanked)
+}
+
+func TestRepository_GetGameForUser(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+
+	userID := uuid.New()
+	gameForUser := &Game{
+		WhiteID:    userID,
+		BlackID:    uuid.New(),
+		Mode:       "classic",
+		Status:     "active",
+		Turn:       "white",
+		BoardState: `{"moves":[]}`,
+	}
+	require.NoError(t, repo.CreateGame(gameForUser))
+
+	t.Run("Participant Can Read Game", func(t *testing.T) {
+		found, err := repo.GetGameForUser(gameForUser.ID, userID)
+		require.NoError(t, err)
+		assert.Equal(t, gameForUser.ID, found.ID)
+	})
+
+	t.Run("Non Participant Cannot Read Game", func(t *testing.T) {
+		_, err := repo.GetGameForUser(gameForUser.ID, uuid.New())
 		assert.ErrorIs(t, err, ErrGameNotFound)
 	})
 }

@@ -25,6 +25,12 @@ func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
 func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 	return nil
 }
+func (d *DummyUserRepository) GetOrCreateRating(_ uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
+	return &users.UserRating{Rating: users.DefaultRating}, nil
+}
+func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
+	return 1216, 1184, nil
+}
 
 type DummyQueueManager struct {
 	AddErr  error
@@ -32,7 +38,7 @@ type DummyQueueManager struct {
 	Removed chan struct{}
 }
 
-func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ bool, _ time.Duration) error {
+func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ int, _ bool, _ time.Duration) error {
 	if d.Added != nil {
 		d.Added <- struct{}{}
 	}

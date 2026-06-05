@@ -298,6 +298,47 @@ func TestClient_ReadPump_JoinQueue(t *testing.T) {
 	assert.Equal(t, 1, hub.Len(), "Client should still be connected after valid JOIN_QUEUE")
 }
 
+func TestClient_ReadPump_JoinQueueRejectsBoardSizeMismatch(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	qm := &DummyQueueManager{Added: make(chan struct{}, 1)}
+	server := httptest.NewServer(mockServeWSWithQueueManager(hub, qm))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	wsMsg := Message{
+		Type:    "JOIN_QUEUE",
+		Payload: json.RawMessage(`{"mode": "classic", "board_size": 10, "is_ranked": true, "time_limit": 10}`),
+	}
+
+	err = conn.WriteJSON(wsMsg)
+	assert.NoError(t, err)
+
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeError, resp.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, ErrorCodeInvalidMessage, payload.Code)
+	assert.Equal(t, "board_size does not match mode", payload.Message)
+	assert.True(t, payload.Recoverable)
+
+	select {
+	case <-qm.Added:
+		t.Fatal("JOIN_QUEUE with mismatched board_size should not call AddPlayer")
+	default:
+	}
+}
+
 func TestClient_ReadPump_JoinQueueError(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()

@@ -19,7 +19,7 @@ const (
 
 // QueueManager абстрагирует логику матчмейкинга от сокетов
 type QueueManager interface {
-	AddPlayer(c *Client, mode string, isRanked bool, timeLimit time.Duration) error
+	AddPlayer(c *Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) error
 	RemovePlayer(c *Client)
 }
 
@@ -203,16 +203,22 @@ func (c *Client) ReadPump() {
 				continue
 			}
 
-			timeLimit := time.Duration(joinReq.TimeLimit) * time.Minute
-			if err := c.QueueManager.AddPlayer(c, joinReq.Mode, joinReq.IsRanked, timeLimit); err != nil {
-				c.SendProtocolError(err, ErrorCodeQueueFailed)
-				continue
-			}
-
 			boardSize := joinReq.BoardSize
 			if boardSize == 0 {
 				boardSize = BoardSizeForMode(joinReq.Mode)
 			}
+			expectedBoardSize := BoardSizeForMode(joinReq.Mode)
+			if expectedBoardSize != 0 && boardSize != expectedBoardSize {
+				c.SendError(ErrorCodeInvalidMessage, "board_size does not match mode", true)
+				continue
+			}
+
+			timeLimit := time.Duration(joinReq.TimeLimit) * time.Minute
+			if err := c.QueueManager.AddPlayer(c, joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit); err != nil {
+				c.SendProtocolError(err, ErrorCodeQueueFailed)
+				continue
+			}
+
 			c.SendQueueJoined(joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit)
 
 		case "CANCEL_QUEUE":

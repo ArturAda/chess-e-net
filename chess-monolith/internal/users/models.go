@@ -25,3 +25,30 @@ func (u *User) BeforeCreate(tx *gorm.DB) (err error) {
 	}
 	return
 }
+
+const DefaultRating = 1200
+
+type RatingScope struct {
+	Mode        string
+	BoardSize   int
+	TimeLimitMs int64
+}
+
+type UserRating struct {
+	ID          uuid.UUID `gorm:"type:uuid;primaryKey"`
+	UserID      uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_user_ratings_scope"`
+	Mode        string    `gorm:"type:varchar(50);not null;uniqueIndex:idx_user_ratings_scope"`
+	BoardSize   int       `gorm:"not null;uniqueIndex:idx_user_ratings_scope"`
+	TimeLimitMs int64     `gorm:"not null;uniqueIndex:idx_user_ratings_scope"`
+	Rating      int       `gorm:"not null;default:1200"`
+	GamesPlayed int       `gorm:"not null;default:0"`
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+func (r *UserRating) BeforeCreate(tx *gorm.DB) (err error) {
+	if r.ID == uuid.Nil {
+		r.ID = uuid.New()
+	}
+	return
+}

@@ -42,6 +42,19 @@ func (m *MockRepository) UpdateRatings(winnerID, loserID uuid.UUID, winnerRating
 	return args.Error(0)
 }
 
+func (m *MockRepository) GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error) {
+	args := m.Called(userID, scope)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*UserRating), args.Error(1)
+}
+
+func (m *MockRepository) ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingScope, user1Score float64) (int, int, error) {
+	args := m.Called(user1ID, user2ID, scope, user1Score)
+	return args.Int(0), args.Int(1), args.Error(2)
+}
+
 func TestService_Register_UserExists(t *testing.T) {
 	mockRepo := new(MockRepository)
 	service := NewService(mockRepo, "secret")
