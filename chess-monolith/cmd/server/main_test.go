@@ -26,7 +26,8 @@ func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 
 type DummyQueueManager struct{}
 
-func (d *DummyQueueManager) AddPlayer(_ *ws.Client, _ string, _ bool, _ time.Duration) {
+func (d *DummyQueueManager) AddPlayer(_ *ws.Client, _ string, _ bool, _ time.Duration) error {
+	return nil
 }
 func (d *DummyQueueManager) RemovePlayer(_ *ws.Client) {}
 
