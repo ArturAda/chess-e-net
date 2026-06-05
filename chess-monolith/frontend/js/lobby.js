@@ -339,8 +339,11 @@ let capturedByOpponent = [];
 let activeMatchRequest = null;
 let queuedForMatch = false;
 let activeRemoteGame = false;
+let currentGameState = null;
 let currentPlayerColor = null;
 let currentGameId = null;
+let currentValidMoves = {};
+let pendingClassicMove = null;
 let historySortDirection = 'desc';
 let historyFilters = new Set();
 let timerState = null;
@@ -667,8 +670,11 @@ function resetClassicEntry() {
     activeMatchRequest = null;
     queuedForMatch = false;
     activeRemoteGame = false;
+    currentGameState = null;
     currentPlayerColor = null;
     currentGameId = null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
     capturedByMe = [];
     capturedByOpponent = [];
     emojiMessages = [];
@@ -730,6 +736,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
             dropOffBoard: 'snapback',
             position: preservedClassicPosition || 'start',
             pieceTheme: pieceTheme,
+            onDragStart: handleClassicDragStart,
             onDrop: handleClassicDrop
         });
         paintRenderedClassicSquares();
@@ -757,8 +764,11 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
     activeMatchRequest = { mode, boardSize, timeControlMinutes };
     queuedForMatch = false;
     activeRemoteGame = false;
+    currentGameState = null;
     currentPlayerColor = null;
     currentGameId = null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
 
     matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
         .then(result => {
@@ -769,6 +779,7 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
             if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
             activeMatchRequest = null;
             queuedForMatch = false;
+            pendingClassicMove = null;
             stopGameTimer();
             setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
         });
@@ -780,6 +791,7 @@ function cancelMatchmaking() {
     }
     queuedForMatch = false;
     activeMatchRequest = null;
+    pendingClassicMove = null;
 }
 
 function isCurrentMatchRequest(mode, boardSize, timeControlMinutes) {
@@ -810,8 +822,11 @@ function handleQueueJoined(payload) {
 function handleMatchFound(payload) {
     queuedForMatch = false;
     activeRemoteGame = true;
+    currentGameState = null;
     currentGameId = payload?.game_id || null;
     currentPlayerColor = payload?.player_color || null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
 
     const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
     const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes || 10;
@@ -831,8 +846,11 @@ function handleGameState(gameState) {
 
     activeRemoteGame = true;
     queuedForMatch = false;
+    currentGameState = gameState;
     currentGameId = gameState.game_id || currentGameId;
     currentPlayerColor = gameState.player_color || currentPlayerColor;
+    currentValidMoves = normalizeValidMoves(gameState.valid_moves);
+    pendingClassicMove = null;
 
     const boardSize = boardSizeFromGameState(gameState);
     const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
@@ -847,8 +865,11 @@ function handleGameState(gameState) {
     applyCapturedPiecesFromGameState(gameState);
     startServerGameTimer(gameState);
 
-    const turnLabel = gameState.turn === currentPlayerColor ? 'Your turn' : 'Opponent turn';
-    setMatchmakingStatus(`${gameState.status || 'active'} · ${turnLabel}`);
+    const status = gameState.status || 'active';
+    const turnLabel = status === 'active'
+        ? (gameState.turn === currentPlayerColor ? 'Your turn' : 'Opponent turn')
+        : 'Game finished';
+    setMatchmakingStatus(`${status} · ${turnLabel}`);
 }
 
 function handleSocketProtocolError(payload) {
@@ -858,11 +879,15 @@ function handleSocketProtocolError(payload) {
     if (payload?.code === 'UNKNOWN_MODE') {
         queuedForMatch = false;
         activeMatchRequest = null;
+        currentGameState = null;
+        currentValidMoves = {};
+        pendingClassicMove = null;
         stopGameTimer();
     }
 }
 
 function handleMoveRejected(payload) {
+    pendingClassicMove = null;
     setMatchmakingStatus(payload?.message || 'Move rejected.');
 }
 
@@ -870,6 +895,7 @@ function handleSocketClose() {
     if (queuedForMatch) {
         queuedForMatch = false;
         activeMatchRequest = null;
+        pendingClassicMove = null;
         stopGameTimer();
         setMatchmakingStatus('Connection closed while searching.');
     }
@@ -881,6 +907,15 @@ function boardSizeFromGameState(gameState) {
         || gameState?.board?.height
         || currentVisualBoardSize
         || 8;
+}
+
+function normalizeValidMoves(validMoves) {
+    return Object.entries(validMoves || {}).reduce((moves, [from, targets]) => {
+        if (Array.isArray(targets)) {
+            moves[from] = targets.filter(Boolean);
+        }
+        return moves;
+    }, {});
 }
 
 function ensureBoardForGameState(boardSize, timeControlMinutes, mode) {
@@ -1467,8 +1502,11 @@ function bindAccountForm() {
         activeMatchRequest = null;
         queuedForMatch = false;
         activeRemoteGame = false;
+        currentGameState = null;
         currentPlayerColor = null;
         currentGameId = null;
+        currentValidMoves = {};
+        pendingClassicMove = null;
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -1639,12 +1677,125 @@ function pieceTheme(piece) {
     return getPieceSrc(piece);
 }
 
-function handleClassicDrop(source, target, piece, newPosition, oldPosition) {
-    if (!target || target === 'offboard' || source === target) return undefined;
-    trackCapture(piece, oldPosition?.[target]);
-    handleLocalMoveComplete();
-    renderCapturedPieces();
-    return undefined;
+function handleClassicDragStart(source, piece) {
+    if (!isClassicBackendGameReady()) {
+        setMatchmakingStatus('Waiting for game state from backend.');
+        return false;
+    }
+
+    if (pendingClassicMove) {
+        setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (currentGameState.status !== 'active') {
+        setMatchmakingStatus(currentGameState.status || 'Game is not active.');
+        return false;
+    }
+
+    if (!isCurrentPlayerTurn()) {
+        setMatchmakingStatus('Opponent turn.');
+        return false;
+    }
+
+    if (!isClassicPieceOwnedByPlayer(piece)) {
+        setMatchmakingStatus('You can move only your pieces.');
+        return false;
+    }
+
+    if (validTargetsForSquare(source).length === 0) {
+        setMatchmakingStatus('This piece has no legal moves.');
+        return false;
+    }
+
+    return true;
+}
+
+function handleClassicDrop(source, target, piece) {
+    if (!target || target === 'offboard' || source === target) return 'snapback';
+
+    if (!canSubmitClassicMove(source, target, piece)) {
+        return 'snapback';
+    }
+
+    pendingClassicMove = { from: source, to: target };
+    setMatchmakingStatus(`Sending move ${source}-${target}...`);
+
+    try {
+        if (window.ChessSocket?.move) {
+            ChessSocket.move({ from: source, to: target });
+        } else {
+            ChessSocket.send('MOVE', { from: source, to: target });
+        }
+    } catch (error) {
+        pendingClassicMove = null;
+        setMatchmakingStatus(error.message || 'Unable to send move.');
+    }
+
+    return 'snapback';
+}
+
+function canSubmitClassicMove(source, target, piece) {
+    if (!isClassicBackendGameReady()) {
+        setMatchmakingStatus('Waiting for game state from backend.');
+        return false;
+    }
+
+    if (pendingClassicMove) {
+        setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (!window.ChessSocket?.isOpen?.()) {
+        setMatchmakingStatus('WebSocket is not connected.');
+        return false;
+    }
+
+    if (currentGameState.status !== 'active') {
+        setMatchmakingStatus(currentGameState.status || 'Game is not active.');
+        return false;
+    }
+
+    if (!isCurrentPlayerTurn()) {
+        setMatchmakingStatus('Opponent turn.');
+        return false;
+    }
+
+    if (!isClassicPieceOwnedByPlayer(piece)) {
+        setMatchmakingStatus('You can move only your pieces.');
+        return false;
+    }
+
+    if (!validTargetsForSquare(source).includes(target)) {
+        setMatchmakingStatus('Illegal move.');
+        return false;
+    }
+
+    return true;
+}
+
+function isClassicBackendGameReady() {
+    return activeRemoteGame
+        && currentGameState
+        && currentPlayerColor
+        && boardSizeFromGameState(currentGameState) === 8;
+}
+
+function isCurrentPlayerTurn() {
+    return currentGameState?.turn === currentPlayerColor;
+}
+
+function isClassicPieceOwnedByPlayer(piece) {
+    if (!piece || !currentPlayerColor) return false;
+    return piece[0] === frontendColorCode(currentPlayerColor);
+}
+
+function frontendColorCode(color) {
+    return color === 'white' ? 'w' : 'b';
+}
+
+function validTargetsForSquare(square) {
+    return Array.isArray(currentValidMoves?.[square]) ? currentValidMoves[square] : [];
 }
 
 function trackCapture(movingPiece, capturedPiece) {
