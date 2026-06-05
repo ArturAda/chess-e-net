@@ -144,23 +144,41 @@ class MatchmakingStrategy {
     }
 }
 
-class LocalMatchmakingStrategy extends MatchmakingStrategy {
-    findMatch({ mode, boardSize, timeControlMinutes }) {
-        return Promise.resolve({
+class WebSocketMatchmakingStrategy extends MatchmakingStrategy {
+    async findMatch({ mode, boardSize, timeControlMinutes }) {
+        const token = window.ChessApi?.getToken?.();
+        if (!token) {
+            throw new Error('Log in before searching for a match.');
+        }
+
+        if (!window.ChessSocket) {
+            throw new Error('WebSocket client is not loaded.');
+        }
+
+        await ChessSocket.connect(token);
+        ChessSocket.joinQueue({
+            mode,
+            boardSize,
+            isRanked: false,
+            timeControlMinutes
+        });
+
+        return {
             mode,
             boardSize,
             timeControlMinutes,
             status: 'waiting',
-            message: `Searching for ${mode} ${boardSize}×${boardSize}, ${timeControlMinutes} min match.`
-        });
+            message: `Searching for ${modeLabel(mode, boardSize)} · ${timeControlMinutes} min.`
+        };
     }
 
     cancel() {
+        window.ChessSocket?.cancelQueue?.();
         return Promise.resolve({ status: 'cancelled' });
     }
 }
 
-const matchmakingClient = new LocalMatchmakingStrategy();
+const matchmakingClient = new WebSocketMatchmakingStrategy();
 
 const builtInPieceStrategies = [
     new BuiltInPieceStyleStrategy({
@@ -318,6 +336,11 @@ let selectedModernBoardSize = null;
 let selectedModernTimeMinutes = null;
 let capturedByMe = [];
 let capturedByOpponent = [];
+let activeMatchRequest = null;
+let queuedForMatch = false;
+let activeRemoteGame = false;
+let currentPlayerColor = null;
+let currentGameId = null;
 let historySortDirection = 'desc';
 let historyFilters = new Set();
 let timerState = null;
@@ -338,6 +361,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bindClassicSetupControls();
     bindModernSetupControls();
     bindHistoryControls();
+    bindSocketEvents();
     bindAccountForm();
     renderAccountProfile();
     refreshAccountFromBackend();
@@ -523,6 +547,39 @@ function spawnFallingPiece(layer) {
     layer.appendChild(piece);
 }
 
+function modeForBoardSize(boardSize) {
+    if (boardSize === 8) return 'classic';
+    if (boardSize === 10) return 'modern10';
+    if (boardSize === 12) return 'modern12';
+    return 'classic';
+}
+
+function modeLabel(mode, boardSize = null) {
+    if (mode === 'classic') return 'classic 8×8';
+    if (mode === 'modern10') return 'modern 10×10';
+    if (mode === 'modern12') return 'modern 12×12';
+    return boardSize ? `${mode} ${boardSize}×${boardSize}` : mode;
+}
+
+async function ensureMatchAuthentication() {
+    if (!window.ChessApi?.hasToken?.()) {
+        navigateTo('page-account');
+        showAccountMessage('Log in before searching for a match.');
+        return false;
+    }
+
+    if (!accountProfile.signedIn || !accountProfile.username) {
+        const refreshed = await refreshAccountFromBackend();
+        if (!refreshed) {
+            navigateTo('page-account');
+            showAccountMessage('Log in before searching for a match.');
+            return false;
+        }
+    }
+
+    return true;
+}
+
 function bindClassicSetupControls() {
     document.querySelectorAll('[data-time-control]').forEach(button => {
         button.addEventListener('click', () => {
@@ -531,8 +588,9 @@ function bindClassicSetupControls() {
         });
     });
 
-    document.getElementById('classic-start-btn')?.addEventListener('click', () => {
+    document.getElementById('classic-start-btn')?.addEventListener('click', async () => {
         if (!selectedClassicTimeMinutes) return;
+        if (!await ensureMatchAuthentication()) return;
         renderClassicBoard(8, selectedClassicTimeMinutes, true, true, 'classic');
     });
 }
@@ -552,12 +610,13 @@ function bindModernSetupControls() {
         });
     });
 
-    document.getElementById('modern-start-btn')?.addEventListener('click', () => {
+    document.getElementById('modern-start-btn')?.addEventListener('click', async () => {
         if (!selectedModernBoardSize || !selectedModernTimeMinutes) return;
+        if (!await ensureMatchAuthentication()) return;
         const boardSize = selectedModernBoardSize;
         const timeControl = selectedModernTimeMinutes;
         navigateTo('page-classic');
-        renderClassicBoard(boardSize, timeControl, true, true, 'modern');
+        renderClassicBoard(boardSize, timeControl, true, true, modeForBoardSize(boardSize));
     });
 }
 
@@ -605,6 +664,11 @@ function resetClassicEntry() {
     selectedCustomSquare = null;
     selectedClassicBoardSize = 8;
     selectedClassicTimeMinutes = null;
+    activeMatchRequest = null;
+    queuedForMatch = false;
+    activeRemoteGame = false;
+    currentPlayerColor = null;
+    currentGameId = null;
     capturedByMe = [];
     capturedByOpponent = [];
     emojiMessages = [];
@@ -690,14 +754,227 @@ function destroyBoard() {
 
 function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode) {
     setMatchmakingStatus('Searching...');
-    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes }).then(result => {
-        if (currentGameMode !== mode || currentVisualBoardSize !== boardSize || currentTimeControlMinutes !== timeControlMinutes) return;
-        setMatchmakingStatus(result.message);
-    });
+    activeMatchRequest = { mode, boardSize, timeControlMinutes };
+    queuedForMatch = false;
+    activeRemoteGame = false;
+    currentPlayerColor = null;
+    currentGameId = null;
+
+    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
+        .then(result => {
+            if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
+            setMatchmakingStatus(result.message);
+        })
+        .catch(error => {
+            if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
+            activeMatchRequest = null;
+            queuedForMatch = false;
+            stopGameTimer();
+            setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
+        });
 }
 
 function cancelMatchmaking() {
-    matchmakingClient.cancel();
+    if (queuedForMatch) {
+        matchmakingClient.cancel();
+    }
+    queuedForMatch = false;
+    activeMatchRequest = null;
+}
+
+function isCurrentMatchRequest(mode, boardSize, timeControlMinutes) {
+    return activeMatchRequest?.mode === mode
+        && activeMatchRequest?.boardSize === boardSize
+        && activeMatchRequest?.timeControlMinutes === timeControlMinutes;
+}
+
+function bindSocketEvents() {
+    if (!window.ChessSocket) return;
+
+    ChessSocket.on('QUEUE_JOINED', handleQueueJoined);
+    ChessSocket.on('MATCH_FOUND', handleMatchFound);
+    ChessSocket.on('GAME_STATE', handleGameState);
+    ChessSocket.on('ERROR', handleSocketProtocolError);
+    ChessSocket.on('MOVE_REJECTED', handleMoveRejected);
+    ChessSocket.on('CLOSE', handleSocketClose);
+}
+
+function handleQueueJoined(payload) {
+    queuedForMatch = true;
+    const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
+    const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
+    const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes;
+    setMatchmakingStatus(`Searching for ${modeLabel(mode, boardSize)} · ${minutes} min.`);
+}
+
+function handleMatchFound(payload) {
+    queuedForMatch = false;
+    activeRemoteGame = true;
+    currentGameId = payload?.game_id || null;
+    currentPlayerColor = payload?.player_color || null;
+
+    const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
+    const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes || 10;
+    const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
+
+    if (currentVisualBoardSize !== boardSize || currentGameMode !== mode) {
+        renderClassicBoard(boardSize, minutes, true, false, mode);
+    }
+
+    const colorLabel = currentPlayerColor || 'unknown color';
+    const opponent = payload?.opponent?.username || 'opponent';
+    setMatchmakingStatus(`Match found vs ${opponent}. You play ${colorLabel}.`);
+}
+
+function handleGameState(gameState) {
+    if (!gameState) return;
+
+    activeRemoteGame = true;
+    queuedForMatch = false;
+    currentGameId = gameState.game_id || currentGameId;
+    currentPlayerColor = gameState.player_color || currentPlayerColor;
+
+    const boardSize = boardSizeFromGameState(gameState);
+    const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
+    const minutes = currentTimeControlMinutes || Math.max(
+        Math.ceil((gameState.white_time_left_ms || 0) / 60000),
+        Math.ceil((gameState.black_time_left_ms || 0) / 60000),
+        1
+    );
+
+    ensureBoardForGameState(boardSize, minutes, mode);
+    applyPositionFromGameState(gameState, boardSize);
+    applyCapturedPiecesFromGameState(gameState);
+    startServerGameTimer(gameState);
+
+    const turnLabel = gameState.turn === currentPlayerColor ? 'Your turn' : 'Opponent turn';
+    setMatchmakingStatus(`${gameState.status || 'active'} · ${turnLabel}`);
+}
+
+function handleSocketProtocolError(payload) {
+    const message = payload?.message || 'WebSocket error.';
+    setMatchmakingStatus(message);
+
+    if (payload?.code === 'UNKNOWN_MODE') {
+        queuedForMatch = false;
+        activeMatchRequest = null;
+        stopGameTimer();
+    }
+}
+
+function handleMoveRejected(payload) {
+    setMatchmakingStatus(payload?.message || 'Move rejected.');
+}
+
+function handleSocketClose() {
+    if (queuedForMatch) {
+        queuedForMatch = false;
+        activeMatchRequest = null;
+        stopGameTimer();
+        setMatchmakingStatus('Connection closed while searching.');
+    }
+}
+
+function boardSizeFromGameState(gameState) {
+    return gameState?.board_size
+        || gameState?.board?.width
+        || gameState?.board?.height
+        || currentVisualBoardSize
+        || 8;
+}
+
+function ensureBoardForGameState(boardSize, timeControlMinutes, mode) {
+    const boardShell = document.getElementById('classic-board-shell');
+    const isBoardVisible = boardShell && !boardShell.classList.contains('hidden');
+    const needsRender = currentVisualBoardSize !== boardSize
+        || currentTimeControlMinutes !== timeControlMinutes
+        || currentGameMode !== mode
+        || !isBoardVisible;
+
+    if (needsRender) {
+        renderClassicBoard(boardSize, timeControlMinutes, true, false, mode);
+    }
+}
+
+function applyPositionFromGameState(gameState, boardSize) {
+    const pieces = gameState?.board?.pieces || [];
+    if (boardSize === 8) {
+        const position = backendPiecesToChessboardPosition(pieces);
+        if (!board) {
+            renderClassicBoard(boardSize, currentTimeControlMinutes || 10, true, false, currentGameMode);
+        }
+        board?.position(position, false);
+        paintRenderedClassicSquares();
+        requestAnimationFrame(paintRenderedClassicSquares);
+        return;
+    }
+
+    currentCustomPosition = backendPiecesToCustomPosition(pieces, boardSize);
+    selectedCustomSquare = null;
+    refreshCurrentBoard(false);
+}
+
+function backendPiecesToChessboardPosition(pieces) {
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        if (code && piece.square) {
+            position[piece.square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function backendPiecesToCustomPosition(pieces, boardSize) {
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        const square = backendSquareToCustomKey(piece.square, boardSize);
+        if (code && square) {
+            position[square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function backendPieceToFrontendCode(piece) {
+    if (!piece?.type || !piece?.color) return '';
+
+    const color = piece.color === 'white' ? 'w' : 'b';
+    const typeMap = {
+        pawn: 'P',
+        rook: 'R',
+        knight: 'N',
+        horse: 'N',
+        bishop: 'B',
+        queen: 'Q',
+        king: 'K'
+    };
+    const type = typeMap[piece.type];
+    return type ? `${color}${type}` : '';
+}
+
+function backendSquareToCustomKey(square, boardSize) {
+    if (!square || square.length < 2) return '';
+
+    const file = square.charCodeAt(0) - 'a'.charCodeAt(0);
+    const rank = Number(square.slice(1));
+    if (!Number.isInteger(rank) || file < 0 || file >= boardSize || rank < 1 || rank > boardSize) return '';
+
+    return squareKey(boardSize - rank, file);
+}
+
+function applyCapturedPiecesFromGameState(gameState) {
+    const capturedWhite = gameState?.captured_white || [];
+    const capturedBlack = gameState?.captured_black || [];
+
+    if (currentPlayerColor === 'black') {
+        capturedByMe = capturedWhite.map(backendPieceToFrontendCode).filter(Boolean);
+        capturedByOpponent = capturedBlack.map(backendPieceToFrontendCode).filter(Boolean);
+    } else {
+        capturedByMe = capturedBlack.map(backendPieceToFrontendCode).filter(Boolean);
+        capturedByOpponent = capturedWhite.map(backendPieceToFrontendCode).filter(Boolean);
+    }
+
+    renderCapturedPieces();
 }
 
 function setMatchmakingStatus(message) {
@@ -711,6 +988,7 @@ function startGameTimer(timeControlMinutes) {
     const selectedSeconds = timeControlMinutes * 60;
     const searchSeconds = 60;
     timerState = {
+        mode: 'search',
         initialSeconds: searchSeconds,
         remaining: {
             opponent: selectedSeconds,
@@ -721,6 +999,43 @@ function startGameTimer(timeControlMinutes) {
     };
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
     timerIntervalId = window.setInterval(tickGameTimer, 250);
+}
+
+function startServerGameTimer(gameState) {
+    if (!gameState) return;
+
+    if (timerIntervalId) {
+        window.clearInterval(timerIntervalId);
+        timerIntervalId = null;
+    }
+    if (matchNotFoundTimeoutId) {
+        window.clearTimeout(matchNotFoundTimeoutId);
+        matchNotFoundTimeoutId = null;
+    }
+
+    const whiteSeconds = Math.ceil((gameState.white_time_left_ms || 0) / 1000);
+    const blackSeconds = Math.ceil((gameState.black_time_left_ms || 0) / 1000);
+    const playerColor = gameState.player_color || currentPlayerColor || 'white';
+    const meSeconds = playerColor === 'white' ? whiteSeconds : blackSeconds;
+    const opponentSeconds = playerColor === 'white' ? blackSeconds : whiteSeconds;
+    const selectedSeconds = Math.max((currentTimeControlMinutes || 0) * 60, meSeconds, opponentSeconds, 1);
+
+    timerState = {
+        mode: 'game',
+        initialSeconds: selectedSeconds,
+        remaining: {
+            opponent: opponentSeconds,
+            me: meSeconds
+        },
+        active: gameState.turn === playerColor ? 'me' : 'opponent',
+        lastTickAt: Date.now()
+    };
+
+    renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
+
+    if (gameState.status === 'active') {
+        timerIntervalId = window.setInterval(tickGameTimer, 250);
+    }
 }
 
 function stopGameTimer() {
@@ -743,10 +1058,11 @@ function tickGameTimer() {
     if (elapsedSeconds < 1) return;
 
     timerState.lastTickAt += elapsedSeconds * 1000;
-    timerState.remaining.me = Math.max(0, timerState.remaining.me - elapsedSeconds);
+    const activeTimer = timerState.active || 'me';
+    timerState.remaining[activeTimer] = Math.max(0, timerState.remaining[activeTimer] - elapsedSeconds);
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
 
-    if (timerState.remaining.me === 0) {
+    if (timerState.mode === 'search' && timerState.remaining.me === 0) {
         window.clearInterval(timerIntervalId);
         timerIntervalId = null;
         showMatchNotFoundOverlay();
@@ -767,9 +1083,7 @@ function renderTimer(kind, seconds) {
     const digits = document.getElementById(`${kind}-timer-digits`);
     if (!timer || !digits) return;
 
-    const initial = kind === 'me'
-        ? timerState?.initialSeconds || 60
-        : Math.max(seconds, 1);
+    const initial = timerState?.initialSeconds || Math.max(seconds, 1);
     const isGood = seconds / initial >= 0.1;
     timer.classList.toggle('timer-good', isGood);
     timer.classList.toggle('timer-low', !isGood);
@@ -1143,9 +1457,18 @@ function bindAccountForm() {
     });
 
     logoutButton?.addEventListener('click', () => {
+        if (queuedForMatch) {
+            window.ChessSocket?.cancelQueue?.();
+        }
+        window.ChessSocket?.close?.();
         ChessApi.logout();
         clearLegacyAccountProfile();
         accountProfile = createEmptyAccountProfile();
+        activeMatchRequest = null;
+        queuedForMatch = false;
+        activeRemoteGame = false;
+        currentPlayerColor = null;
+        currentGameId = null;
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -1231,7 +1554,7 @@ async function refreshAccountFromBackend({ showMessages = false } = {}) {
     if (!window.ChessApi?.hasToken?.()) {
         accountProfile = createEmptyAccountProfile();
         renderAccountProfile();
-        return;
+        return false;
     }
 
     try {
@@ -1246,18 +1569,20 @@ async function refreshAccountFromBackend({ showMessages = false } = {}) {
         if (showMessages) {
             showAccountMessage('Profile refreshed.');
         }
+        return true;
     } catch (error) {
         if (error?.status === 401) {
             ChessApi.clearToken();
             accountProfile = createEmptyAccountProfile();
             renderAccountProfile();
             showAccountMessage(showMessages ? 'Session expired. Log in again.' : '');
-            return;
+            return false;
         }
 
         if (showMessages || document.getElementById('page-account')?.classList.contains('active')) {
             showAccountMessage(getAccountErrorMessage(error));
         }
+        return false;
     }
 }
 
