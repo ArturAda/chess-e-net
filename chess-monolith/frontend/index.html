@@ -203,7 +203,16 @@
     <div id="page-history-detail" class="page">
         <h2 id="history-detail-title">Game Review</h2>
         <section class="history-detail-layout">
-            <div id="history-analysis-board" class="history-analysis-board"></div>
+            <div class="history-replay-column">
+                <div id="history-analysis-board" class="history-analysis-board"></div>
+                <div class="history-replay-controls" aria-label="History replay controls">
+                    <button class="mini-action-btn" type="button" data-history-replay="start">Start</button>
+                    <button class="mini-action-btn" type="button" data-history-replay="prev">←</button>
+                    <span id="history-replay-step" class="history-replay-step">Move 0 / 0</span>
+                    <button class="mini-action-btn" type="button" data-history-replay="next">→</button>
+                    <button class="mini-action-btn" type="button" data-history-replay="end">End</button>
+                </div>
+            </div>
             <aside class="history-analysis-panel">
                 <div class="history-analytics">
                     <div>

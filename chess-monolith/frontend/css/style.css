@@ -1222,6 +1222,14 @@ body[data-background="dark-room"] .game-title::after {
     overflow: hidden;
     border-radius: 6px;
     border: 1px solid rgba(255,255,255,0.2);
+    contain: layout paint;
+}
+
+.history-card-square {
+    min-width: 0;
+    min-height: 0;
+    background-size: cover;
+    background-position: center;
 }
 
 .history-card-board::after {
@@ -1233,18 +1241,6 @@ body[data-background="dark-room"] .game-title::after {
     font-size: 10px;
     font-weight: 900;
     text-shadow: 0 1px 2px rgba(0,0,0,0.9);
-}
-
-.mini-light {
-    background: var(--board-light-color);
-    background-image: var(--board-light-image);
-    background-size: cover;
-}
-
-.mini-dark {
-    background: var(--board-dark-color);
-    background-image: var(--board-dark-image);
-    background-size: cover;
 }
 
 .history-card-meta {
@@ -1271,6 +1267,11 @@ body[data-background="dark-room"] .game-title::after {
     justify-content: center;
 }
 
+.history-replay-column {
+    display: grid;
+    gap: 10px;
+}
+
 .history-analysis-board,
 .history-analysis-panel {
     border: 1px solid rgba(141,252,255,0.24);
@@ -1282,6 +1283,11 @@ body[data-background="dark-room"] .game-title::after {
     padding: 10px;
 }
 
+#history-replay-board,
+.history-classic-board {
+    width: 100% !important;
+}
+
 .history-board-grid {
     display: grid;
     aspect-ratio: 1;
@@ -1289,10 +1295,17 @@ body[data-background="dark-room"] .game-title::after {
     border-radius: 6px;
 }
 
+.history-custom-board {
+    width: 100%;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.32), 0 0 22px rgba(141,252,255,0.16);
+}
+
 .history-board-square {
     position: relative;
     display: grid;
     place-items: center;
+    background-size: cover;
+    background-position: center;
 }
 
 .history-board-square img {
@@ -1321,6 +1334,25 @@ body[data-background="dark-room"] .game-title::after {
 .history-alpha {
     right: 3px;
     bottom: 3px;
+}
+
+.history-replay-controls {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(70px, auto)) minmax(120px, 1fr) repeat(2, minmax(70px, auto));
+    gap: 8px;
+    align-items: center;
+    padding: 10px;
+    border: 1px solid rgba(141,252,255,0.24);
+    border-radius: 8px;
+    background: rgba(8,16,32,0.72);
+}
+
+.history-replay-step {
+    color: #fff9d6;
+    font-size: 13px;
+    font-weight: 900;
+    text-align: center;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.72);
 }
 
 .history-analysis-panel {
@@ -1371,7 +1403,17 @@ body[data-background="dark-room"] .game-title::after {
     padding: 6px 8px;
     border-radius: 6px;
     background: rgba(255,255,255,0.07);
+    border: 1px solid transparent;
+    cursor: pointer;
     text-align: left;
+    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+}
+
+.history-move-row:hover,
+.history-move-row.active {
+    border-color: rgba(247,220,111,0.72);
+    background: rgba(247,220,111,0.14);
+    transform: translateY(-1px);
 }
 
 .history-move-row span {
@@ -1386,6 +1428,14 @@ body[data-background="dark-room"] .game-title::after {
 .history-moves-empty {
     min-height: 74px;
     font-size: 15px;
+}
+
+.history-moving-piece {
+    position: fixed;
+    z-index: 30;
+    object-fit: contain;
+    pointer-events: none;
+    filter: drop-shadow(0 8px 12px rgba(0,0,0,0.34));
 }
 
 .white-1e1d7,
@@ -2208,5 +2258,18 @@ body > .piece-417db {
 
     .history-analytics {
         grid-template-columns: 1fr;
+    }
+
+    .history-replay-controls {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .history-replay-controls [data-history-replay] {
+        grid-row: 2;
+    }
+
+    .history-replay-step {
+        grid-column: 1 / -1;
+        grid-row: 1;
     }
 }

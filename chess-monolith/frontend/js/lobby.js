@@ -352,6 +352,8 @@ let historyLoaded = false;
 let historyLoading = false;
 let historyLoadError = '';
 let activeHistoryDetailRequest = 0;
+let historyReplayState = null;
+let historyReplayBoard = null;
 let timerState = null;
 let timerIntervalId = null;
 let matchNotFoundTimeoutId = null;
@@ -385,15 +387,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.addEventListener('resize', () => {
     markViewportResizing();
-    if (!board) return;
-    board.resize();
-    paintRenderedClassicSquares();
+    if (board) {
+        board.resize();
+        paintRenderedClassicSquares();
+    }
+    if (historyReplayBoard) {
+        historyReplayBoard.resize();
+        paintRenderedClassicSquares('#history-replay-board');
+    }
 });
 
 function navigateTo(pageId) {
     const leavingClassic = document.getElementById('page-classic')?.classList.contains('active') && pageId !== 'page-classic';
     if (leavingClassic) {
         resetClassicEntry();
+    }
+    const leavingHistoryDetail = document.getElementById('page-history-detail')?.classList.contains('active') && pageId !== 'page-history-detail';
+    if (leavingHistoryDetail) {
+        destroyHistoryReplayBoard();
     }
 
     document.querySelectorAll('.page').forEach(page => {
@@ -1323,6 +1334,10 @@ function bindHistoryControls() {
             renderHistoryList();
         });
     });
+
+    document.querySelectorAll('[data-history-replay]').forEach(button => {
+        button.addEventListener('click', () => moveHistoryReplay(button.dataset.historyReplay));
+    });
 }
 
 async function loadHistoryList({ force = false } = {}) {
@@ -1405,6 +1420,8 @@ function renderHistoryList() {
         return;
     }
 
+    const fragment = document.createDocumentFragment();
+
     records.forEach(record => {
         const button = document.createElement('button');
         button.type = 'button';
@@ -1430,8 +1447,10 @@ function renderHistoryList() {
         meta.append(title, format, timestamp);
 
         button.append(board, meta);
-        list.appendChild(button);
+        fragment.appendChild(button);
     });
+
+    list.appendChild(fragment);
 }
 
 function renderHistoryStateMessage(list, message, action = null) {
@@ -1542,6 +1561,7 @@ function renderHistoryDetailError(message) {
 
     const host = document.getElementById('history-analysis-board');
     if (host) {
+        destroyHistoryReplayBoard();
         host.innerHTML = '';
         const empty = document.createElement('div');
         empty.className = 'history-empty';
@@ -1554,34 +1574,231 @@ function renderHistoryDetailError(message) {
 
 function renderHistoryMiniBoard(host, size) {
     host.innerHTML = '';
-    for (let index = 0; index < 16; index += 1) {
-        const square = document.createElement('span');
-        square.className = (Math.floor(index / 4) + index) % 2 === 0 ? 'mini-light' : 'mini-dark';
-        host.appendChild(square);
-    }
     host.dataset.size = `${size}×${size}`;
+    const lightSquare = getSquareStrategy(settings.lightSquareStrategyId);
+    const darkSquare = getSquareStrategy(settings.darkSquareStrategyId);
+    const fragment = document.createDocumentFragment();
+
+    for (let row = 0; row < 4; row += 1) {
+        for (let col = 0; col < 4; col += 1) {
+            const square = document.createElement('span');
+            const strategy = (row + col) % 2 === 0 ? lightSquare : darkSquare;
+            square.className = 'history-card-square';
+            square.style.backgroundImage = `url("${strategy.getSrc()}")`;
+            square.style.backgroundColor = strategy.getColor();
+            fragment.appendChild(square);
+        }
+    }
+
+    host.appendChild(fragment);
 }
 
 function renderHistoryAnalysisBoard(record) {
     const host = document.getElementById('history-analysis-board');
     if (!host) return;
 
+    destroyHistoryReplayBoard();
     host.innerHTML = '';
+
+    if (!record) {
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = 'No game selected.';
+        host.appendChild(empty);
+        updateHistoryReplayControls();
+        return;
+    }
+
+    historyReplayState = createHistoryReplayState(record);
+    renderHistoryReplayPosition({ animate: false });
+}
+
+function createHistoryReplayState(record) {
     const size = clampHistoryBoardSize(record?.boardSize || record?.boardState?.board_size || record?.boardState?.board?.width || 8);
-    const position = backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || []);
+    const moves = Array.isArray(record?.moves) ? record.moves : [];
+
+    return {
+        record,
+        size,
+        orientation: historyReplayOrientation(record),
+        moves,
+        positions: buildHistoryReplayPositions(record, size, moves),
+        index: 0
+    };
+}
+
+function historyReplayOrientation(record) {
+    return record?.playerColor === 'black' ? 'black' : 'white';
+}
+
+function buildHistoryReplayPositions(record, size, moves) {
+    const positions = [buildInitialHistoryPosition(size)];
+
+    moves.forEach(move => {
+        positions.push(applyHistoryMove(positions[positions.length - 1], move, size));
+    });
+
+    const finalPosition = backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || []);
+    if (moves.length > 0 && Object.keys(finalPosition).length > 0) {
+        positions[positions.length - 1] = finalPosition;
+    }
+
+    return positions;
+}
+
+function buildInitialHistoryPosition(size) {
+    const rank = buildBackRank(size);
+    const position = {};
+
+    rank.forEach((piece, col) => {
+        const file = fileLabel(col);
+        position[`${file}${size}`] = `b${piece}`;
+        position[`${file}${size - 1}`] = 'bP';
+        position[`${file}2`] = 'wP';
+        position[`${file}1`] = `w${piece}`;
+    });
+
+    return position;
+}
+
+function applyHistoryMove(position, move, size) {
+    const next = { ...position };
+    const from = move?.from;
+    const to = move?.to;
+    if (!from || !to) return next;
+
+    const movingPiece = next[from] || backendPieceToFrontendCode(move.piece);
+    if (!movingPiece) return next;
+
+    const pieceAfterMove = backendPieceToFrontendCode(move.piece) || movingPiece;
+    const fromSquare = parseHistorySquare(from);
+    const toSquare = parseHistorySquare(to);
+    const targetHadPiece = Boolean(next[to]);
+
+    if (isHistoryEnPassantMove(move, movingPiece, fromSquare, toSquare, targetHadPiece)) {
+        delete next[historySquareFromParts(toSquare.fileIndex, fromSquare.rank)];
+    }
+
+    delete next[from];
+    next[to] = pieceAfterMove;
+
+    applyHistoryCastlingMove(next, movingPiece, fromSquare, toSquare, size);
+
+    return next;
+}
+
+function isHistoryEnPassantMove(move, movingPiece, fromSquare, toSquare, targetHadPiece) {
+    return Boolean(
+        move?.captured
+        && movingPiece[1] === 'P'
+        && fromSquare
+        && toSquare
+        && fromSquare.fileIndex !== toSquare.fileIndex
+        && !targetHadPiece
+    );
+}
+
+function applyHistoryCastlingMove(position, movingPiece, fromSquare, toSquare, size) {
+    if (movingPiece[1] !== 'K' || !fromSquare || !toSquare) return;
+    if (Math.abs(fromSquare.fileIndex - toSquare.fileIndex) !== 2) return;
+
+    const isKingSide = toSquare.fileIndex > fromSquare.fileIndex;
+    const rookFromFile = isKingSide ? size - 1 : 0;
+    const rookToFile = isKingSide ? fromSquare.fileIndex + 1 : fromSquare.fileIndex - 1;
+    const rookFrom = historySquareFromParts(rookFromFile, fromSquare.rank);
+    const rookTo = historySquareFromParts(rookToFile, fromSquare.rank);
+    const rook = position[rookFrom];
+
+    if (!rook) return;
+    delete position[rookFrom];
+    position[rookTo] = rook;
+}
+
+function parseHistorySquare(square) {
+    if (!square || square.length < 2) return null;
+    const fileIndex = square.charCodeAt(0) - 'a'.charCodeAt(0);
+    const rank = Number(square.slice(1));
+    if (!Number.isInteger(rank) || fileIndex < 0 || rank < 1) return null;
+    return { fileIndex, rank };
+}
+
+function historySquareFromParts(fileIndex, rank) {
+    return `${fileLabel(fileIndex)}${rank}`;
+}
+
+function renderHistoryReplayPosition({ animate = false, previousIndex = null } = {}) {
+    const state = historyReplayState;
+    const host = document.getElementById('history-analysis-board');
+    if (!state || !host) return;
+
+    const position = state.positions[state.index] || {};
+
+    if (state.size === 8) {
+        renderHistoryClassicReplayBoard(host, state, position, animate);
+    } else {
+        renderHistoryCustomReplayBoard(host, state, position, animate ? previousIndex : null);
+    }
+
+    updateHistoryReplayControls();
+    updateHistoryMoveSelection();
+}
+
+function renderHistoryClassicReplayBoard(host, state, position, animate) {
+    let boardHost = document.getElementById('history-replay-board');
+    if (!boardHost || !historyReplayBoard) {
+        host.innerHTML = '';
+        boardHost = document.createElement('div');
+        boardHost.id = 'history-replay-board';
+        boardHost.className = 'history-classic-board';
+        host.appendChild(boardHost);
+
+        historyReplayBoard = Chessboard('history-replay-board', {
+            draggable: false,
+            orientation: state.orientation,
+            position,
+            pieceTheme
+        });
+    } else {
+        historyReplayBoard.position(position, animate);
+    }
+
+    paintRenderedClassicSquares('#history-replay-board');
+    requestAnimationFrame(() => paintRenderedClassicSquares('#history-replay-board'));
+}
+
+function renderHistoryCustomReplayBoard(host, state, position, previousIndex = null) {
+    if (historyReplayBoard) {
+        historyReplayBoard.destroy();
+        historyReplayBoard = null;
+    }
+
+    const animation = getHistoryReplayAnimation(previousIndex, state.index);
+    const size = state.size;
+    const lightSquare = getSquareStrategy(settings.lightSquareStrategyId);
+    const darkSquare = getSquareStrategy(settings.darkSquareStrategyId);
     const grid = document.createElement('div');
-    grid.className = 'history-board-grid';
+    grid.className = 'history-board-grid history-custom-board';
+    grid.dataset.size = String(size);
+    grid.dataset.orientation = state.orientation;
     grid.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
     grid.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`;
 
+    host.innerHTML = '';
     for (let row = 0; row < size; row += 1) {
         for (let col = 0; col < size; col += 1) {
             const square = document.createElement('span');
-            const key = historySquareName(row, col, size);
-            square.className = `history-board-square ${(row + col) % 2 === 0 ? 'mini-light' : 'mini-dark'}`;
-            square.title = key;
+            const logicalRow = customLogicalIndex(row, size, state.orientation);
+            const logicalCol = customLogicalIndex(col, size, state.orientation);
+            const key = historySquareName(logicalRow, logicalCol, size);
+            const strategy = (logicalRow + logicalCol) % 2 === 0 ? lightSquare : darkSquare;
 
-            appendHistoryNotation(square, row, col, size);
+            square.className = 'history-board-square';
+            square.dataset.square = key;
+            square.title = key;
+            square.style.backgroundImage = `url("${strategy.getSrc()}")`;
+            square.style.backgroundColor = strategy.getColor();
+
+            appendHistoryNotation(square, row, col, logicalRow, logicalCol, size);
 
             const piece = position[key];
             if (piece) {
@@ -1596,6 +1813,131 @@ function renderHistoryAnalysisBoard(record) {
 
     host.dataset.meta = `${size}×${size}`;
     host.appendChild(grid);
+
+    if (animation) {
+        animateHistoryCustomPiece(host, animation);
+    }
+}
+
+function getHistoryReplayAnimation(previousIndex, nextIndex) {
+    const state = historyReplayState;
+    if (!state || previousIndex === null || previousIndex === nextIndex) return null;
+    if (Math.abs(nextIndex - previousIndex) !== 1) return null;
+
+    const movingForward = nextIndex > previousIndex;
+    const move = state.moves[movingForward ? previousIndex : nextIndex];
+    if (!move?.from || !move?.to) return null;
+
+    const from = movingForward ? move.from : move.to;
+    const to = movingForward ? move.to : move.from;
+    const piece = state.positions[nextIndex]?.[to] || backendPieceToFrontendCode(move.piece);
+    return piece ? { from, to, piece } : null;
+}
+
+function animateHistoryCustomPiece(host, animation) {
+    requestAnimationFrame(() => {
+        const fromSquare = host.querySelector(`[data-square="${animation.from}"]`);
+        const toSquare = host.querySelector(`[data-square="${animation.to}"]`);
+        if (!fromSquare || !toSquare) return;
+
+        const toImage = toSquare.querySelector('img');
+        if (toImage) {
+            toImage.style.visibility = 'hidden';
+        }
+
+        const fromRect = fromSquare.getBoundingClientRect();
+        const toRect = toSquare.getBoundingClientRect();
+        const inset = fromRect.width * 0.08;
+        const clone = document.createElement('img');
+        clone.className = 'history-moving-piece';
+        clone.src = getPieceSrc(animation.piece);
+        clone.alt = '';
+        clone.style.left = `${fromRect.left + inset}px`;
+        clone.style.top = `${fromRect.top + inset}px`;
+        clone.style.width = `${fromRect.width - inset * 2}px`;
+        clone.style.height = `${fromRect.height - inset * 2}px`;
+        document.body.appendChild(clone);
+
+        const animationHandle = clone.animate([
+            { transform: 'translate3d(0, 0, 0)' },
+            { transform: `translate3d(${toRect.left - fromRect.left}px, ${toRect.top - fromRect.top}px, 0)` }
+        ], {
+            duration: 240,
+            easing: 'cubic-bezier(.2,.8,.2,1)'
+        });
+
+        animationHandle.onfinish = () => {
+            clone.remove();
+            if (toImage) {
+                toImage.style.visibility = '';
+            }
+        };
+        animationHandle.oncancel = animationHandle.onfinish;
+    });
+}
+
+function moveHistoryReplay(action) {
+    const state = historyReplayState;
+    if (!state) return;
+
+    const previousIndex = state.index;
+    const maxIndex = Math.max(0, state.positions.length - 1);
+    if (action === 'start') {
+        state.index = 0;
+    } else if (action === 'prev') {
+        state.index = Math.max(0, state.index - 1);
+    } else if (action === 'next') {
+        state.index = Math.min(maxIndex, state.index + 1);
+    } else if (action === 'end') {
+        state.index = maxIndex;
+    }
+
+    if (state.index === previousIndex) {
+        updateHistoryReplayControls();
+        return;
+    }
+
+    renderHistoryReplayPosition({
+        animate: Math.abs(state.index - previousIndex) === 1,
+        previousIndex
+    });
+}
+
+function updateHistoryReplayControls() {
+    const state = historyReplayState;
+    const maxIndex = state ? Math.max(0, state.positions.length - 1) : 0;
+    const index = state ? state.index : 0;
+    const label = document.getElementById('history-replay-step');
+    if (label) {
+        label.textContent = index === 0
+            ? `Start position · 0 / ${maxIndex}`
+            : `Move ${index} / ${maxIndex}`;
+    }
+
+    document.querySelectorAll('[data-history-replay]').forEach(button => {
+        const action = button.dataset.historyReplay;
+        button.disabled = !state
+            || (action === 'start' && index === 0)
+            || (action === 'prev' && index === 0)
+            || (action === 'next' && index === maxIndex)
+            || (action === 'end' && index === maxIndex);
+    });
+}
+
+function updateHistoryMoveSelection() {
+    document.querySelectorAll('[data-history-move-index]').forEach(row => {
+        const moveIndex = Number(row.dataset.historyMoveIndex);
+        row.classList.toggle('active', Boolean(historyReplayState && historyReplayState.index === moveIndex));
+    });
+}
+
+function destroyHistoryReplayBoard() {
+    if (historyReplayBoard) {
+        historyReplayBoard.destroy();
+        historyReplayBoard = null;
+    }
+    historyReplayState = null;
+    updateHistoryReplayControls();
 }
 
 function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this game.') {
@@ -1615,6 +1957,16 @@ function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this g
     moves.forEach((move, index) => {
         const row = document.createElement('div');
         row.className = 'history-move-row';
+        row.dataset.historyMoveIndex = String(index + 1);
+        row.addEventListener('click', () => {
+            if (!historyReplayState) return;
+            const previousIndex = historyReplayState.index;
+            historyReplayState.index = index + 1;
+            renderHistoryReplayPosition({
+                animate: Math.abs(historyReplayState.index - previousIndex) === 1,
+                previousIndex
+            });
+        });
 
         const number = document.createElement('span');
         number.textContent = String(index + 1);
@@ -1625,6 +1977,8 @@ function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this g
         row.append(number, text);
         list.appendChild(row);
     });
+
+    updateHistoryMoveSelection();
 }
 
 function resultLabel(result) {
@@ -1769,18 +2123,18 @@ function historySquareName(row, col, size) {
     return `${fileLabel(col)}${size - row}`;
 }
 
-function appendHistoryNotation(square, row, col, size) {
-    if (col === 0) {
+function appendHistoryNotation(square, visualRow, visualCol, logicalRow, logicalCol, size) {
+    if (visualCol === 0) {
         const rank = document.createElement('span');
         rank.className = 'history-notation history-numeric';
-        rank.textContent = String(size - row);
+        rank.textContent = String(size - logicalRow);
         square.appendChild(rank);
     }
 
-    if (row === size - 1) {
+    if (visualRow === size - 1) {
         const file = document.createElement('span');
         file.className = 'history-notation history-alpha';
-        file.textContent = fileLabel(col);
+        file.textContent = fileLabel(logicalCol);
         square.appendChild(file);
     }
 }
@@ -2350,18 +2704,18 @@ function renderPieceLegend() {
     });
 }
 
-function paintRenderedClassicSquares() {
+function paintRenderedClassicSquares(rootSelector = '#myBoard') {
     const light = getSquareStrategy(settings.lightSquareStrategyId);
     const dark = getSquareStrategy(settings.darkSquareStrategyId);
 
-    document.querySelectorAll('#myBoard .white-1e1d7').forEach(square => {
+    document.querySelectorAll(`${rootSelector} .white-1e1d7`).forEach(square => {
         square.style.setProperty('background-color', light.getColor(), 'important');
         square.style.setProperty('background-image', `url("${light.getSrc()}")`, 'important');
         square.style.setProperty('background-size', 'cover', 'important');
         square.style.setProperty('background-position', 'center', 'important');
     });
 
-    document.querySelectorAll('#myBoard .black-3c85d').forEach(square => {
+    document.querySelectorAll(`${rootSelector} .black-3c85d`).forEach(square => {
         square.style.setProperty('background-color', dark.getColor(), 'important');
         square.style.setProperty('background-image', `url("${dark.getSrc()}")`, 'important');
         square.style.setProperty('background-size', 'cover', 'important');
