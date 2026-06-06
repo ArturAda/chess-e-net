@@ -65,8 +65,11 @@ func readClientMessage(t *testing.T, ch <-chan []byte) Message {
 	}
 }
 
-func newDrawTestClients() (*Client, *Client, *session.GameSession) {
-	game := &session.GameSession{Status: "active"}
+func newActiveGameTestClients() (*Client, *Client, *session.GameSession) {
+	game := &session.GameSession{
+		ID:     "game-1",
+		Status: "active",
+	}
 	white := &Client{
 		Send:       make(chan []byte, 16),
 		UserID:     "white-user",
@@ -507,7 +510,7 @@ func TestClient_ReadPump_Move(t *testing.T) {
 }
 
 func TestClient_DrawOfferSendsPayloadToBothPlayers(t *testing.T) {
-	white, black, game := newDrawTestClients()
+	white, black, game := newActiveGameTestClients()
 
 	white.handleDrawOffer()
 
@@ -528,7 +531,7 @@ func TestClient_DrawOfferSendsPayloadToBothPlayers(t *testing.T) {
 }
 
 func TestClient_DrawAcceptEndsGameAndNotifiesBothPlayers(t *testing.T) {
-	white, black, game := newDrawTestClients()
+	white, black, game := newActiveGameTestClients()
 	white.handleDrawOffer()
 	readClientMessage(t, white.Send)
 	readClientMessage(t, black.Send)
@@ -550,7 +553,7 @@ func TestClient_DrawAcceptEndsGameAndNotifiesBothPlayers(t *testing.T) {
 }
 
 func TestClient_DrawDeclineClearsOfferAndNotifiesBothPlayers(t *testing.T) {
-	white, black, game := newDrawTestClients()
+	white, black, game := newActiveGameTestClients()
 	white.handleDrawOffer()
 	readClientMessage(t, white.Send)
 	readClientMessage(t, black.Send)
@@ -566,7 +569,7 @@ func TestClient_DrawDeclineClearsOfferAndNotifiesBothPlayers(t *testing.T) {
 }
 
 func TestClient_DrawOffererCannotAcceptOwnOffer(t *testing.T) {
-	white, black, game := newDrawTestClients()
+	white, black, game := newActiveGameTestClients()
 	white.handleDrawOffer()
 	readClientMessage(t, white.Send)
 	readClientMessage(t, black.Send)
@@ -584,7 +587,7 @@ func TestClient_DrawOffererCannotAcceptOwnOffer(t *testing.T) {
 }
 
 func TestClient_DrawOfferExpirationNotifiesBothPlayers(t *testing.T) {
-	white, black, game := newDrawTestClients()
+	white, black, game := newActiveGameTestClients()
 	offer, err := game.CreateDrawOffer(core.White, white.UserID, time.Now().Add(-session.DrawOfferTTL-time.Millisecond))
 	require.NoError(t, err)
 
@@ -595,4 +598,69 @@ func TestClient_DrawOfferExpirationNotifiesBothPlayers(t *testing.T) {
 	assert.Equal(t, MessageTypeDrawExpired, whiteMsg.Type)
 	assert.Equal(t, MessageTypeDrawExpired, blackMsg.Type)
 	assert.Nil(t, game.DrawOffer)
+}
+
+func TestClient_ChatStickerRelaysWhitelistedStickerToBothPlayers(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "clown"})
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeChatSticker, whiteMsg.Type)
+	assert.Equal(t, MessageTypeChatSticker, blackMsg.Type)
+
+	var payload ChatStickerPayload
+	require.NoError(t, json.Unmarshal(blackMsg.Payload, &payload))
+	assert.NotEmpty(t, payload.MessageID)
+	assert.Equal(t, "game-1", payload.GameID)
+	assert.Equal(t, "white-user", payload.SenderUserID)
+	assert.Equal(t, "White", payload.SenderUsername)
+	assert.Equal(t, "white", payload.SenderColor)
+	assert.Equal(t, "clown", payload.StickerID)
+	assert.Equal(t, "Clown", payload.Label)
+	assert.Equal(t, "images/smiles/clown.png", payload.Src)
+	assert.False(t, payload.SentAt.IsZero())
+}
+
+func TestClient_ChatStickerNormalizesStickerID(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "  CLOWN  "})
+
+	msg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeChatSticker, msg.Type)
+
+	var payload ChatStickerPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, "clown", payload.StickerID)
+}
+
+func TestClient_ChatStickerRejectsUnknownSticker(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "external-url"})
+
+	msg := readClientMessage(t, white.Send)
+	assert.Equal(t, MessageTypeError, msg.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, ErrorCodeInvalidSticker, payload.Code)
+	assert.Equal(t, "Unknown sticker", payload.Message)
+	assert.Empty(t, black.Send)
+}
+
+func TestClient_ChatStickerRequiresActiveGame(t *testing.T) {
+	white, _, game := newActiveGameTestClients()
+	game.Status = "draw"
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "clown"})
+
+	msg := readClientMessage(t, white.Send)
+	assert.Equal(t, MessageTypeError, msg.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, ErrorCodeNotInGame, payload.Code)
 }

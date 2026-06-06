@@ -254,6 +254,14 @@ func (c *Client) ReadPump() {
 		case "DRAW_DECLINE":
 			c.handleDrawDecline()
 
+		case "CHAT_STICKER":
+			var stickerReq ChatStickerRequest
+			if err := json.Unmarshal(wsMsg.Payload, &stickerReq); err != nil {
+				c.SendError(ErrorCodeInvalidMessage, "Invalid chat sticker payload", true)
+				continue
+			}
+			c.handleChatSticker(stickerReq)
+
 		default:
 			log.Printf("Unknown message type: %s", wsMsg.Type)
 			c.SendError(ErrorCodeUnknownMessage, "Unknown message type: "+wsMsg.Type, true)

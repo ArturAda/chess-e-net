@@ -17,6 +17,7 @@ const (
 	MessageTypeDrawAccepted = "DRAW_ACCEPTED"
 	MessageTypeDrawDecline  = "DRAW_DECLINE"
 	MessageTypeDrawExpired  = "DRAW_EXPIRED"
+	MessageTypeChatSticker  = "CHAT_STICKER"
 )
 
 const (
@@ -30,6 +31,7 @@ const (
 	ErrorCodeGameAlreadyOver = "GAME_ALREADY_OVER"
 	ErrorCodeDrawOfferActive = "DRAW_OFFER_ACTIVE"
 	ErrorCodeDrawOfferState  = "DRAW_OFFER_STATE"
+	ErrorCodeInvalidSticker  = "INVALID_STICKER"
 	ErrorCodeInternal        = "INTERNAL_ERROR"
 )
 
@@ -86,6 +88,22 @@ type DrawOfferResultPayload struct {
 	RespondedBy       string `json:"responded_by,omitempty"`
 	RespondedByUserID string `json:"responded_by_user_id,omitempty"`
 	Message           string `json:"message"`
+}
+
+type ChatStickerRequest struct {
+	StickerID string `json:"sticker_id"`
+}
+
+type ChatStickerPayload struct {
+	MessageID      string    `json:"message_id"`
+	GameID         string    `json:"game_id,omitempty"`
+	SenderUserID   string    `json:"sender_user_id"`
+	SenderUsername string    `json:"sender_username,omitempty"`
+	SenderColor    string    `json:"sender_color"`
+	StickerID      string    `json:"sticker_id"`
+	Label          string    `json:"label"`
+	Src            string    `json:"src"`
+	SentAt         time.Time `json:"sent_at"`
 }
 
 type ProtocolError struct {
