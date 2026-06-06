@@ -117,6 +117,17 @@ const ChessApi = (() => {
         return request('/me', { auth: true });
     }
 
+    async function listGames() {
+        return request('/games', { auth: true });
+    }
+
+    async function getGame(id) {
+        if (!id) {
+            throw new ApiError('Game id is required.');
+        }
+        return request(`/games/${encodeURIComponent(id)}`, { auth: true });
+    }
+
     function logout() {
         clearToken();
     }
@@ -133,6 +144,8 @@ const ChessApi = (() => {
         register,
         login,
         me,
+        listGames,
+        getGame,
         logout,
         getToken,
         setToken,

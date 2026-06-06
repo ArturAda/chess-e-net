@@ -314,7 +314,7 @@ const emojiChatItems = [
     { id: 'rocket', name: 'Rocket mood', src: `${ASSET_ROOT}/smiles/rocket_mood.png` }
 ];
 
-const historyRecords = [];
+let historyRecords = [];
 const LEGACY_HISTORY_STORAGE_KEYS = [
     'chessemag_history',
     'chessemagHistory',
@@ -348,6 +348,10 @@ let classicSnapbackInProgress = false;
 let queuedClassicPositionUpdate = null;
 let historySortDirection = 'desc';
 let historyFilters = new Set();
+let historyLoaded = false;
+let historyLoading = false;
+let historyLoadError = '';
+let activeHistoryDetailRequest = 0;
 let timerState = null;
 let timerIntervalId = null;
 let matchNotFoundTimeoutId = null;
@@ -413,7 +417,7 @@ function navigateTo(pageId) {
     }
 
     if (pageId === 'page-history') {
-        renderHistoryList();
+        loadHistoryList({ force: true });
     }
 
     if (pageId === 'page-settings') {
@@ -1289,9 +1293,72 @@ function bindHistoryControls() {
     });
 }
 
+async function loadHistoryList({ force = false } = {}) {
+    const list = document.getElementById('history-list');
+    if (!list) return;
+
+    if (!window.ChessApi?.hasToken?.()) {
+        resetHistoryState();
+        renderHistoryList();
+        return;
+    }
+
+    if (historyLoading) {
+        renderHistoryList();
+        return;
+    }
+
+    if (historyLoaded && !force) {
+        renderHistoryList();
+        return;
+    }
+
+    historyLoading = true;
+    historyLoadError = '';
+    renderHistoryList();
+
+    try {
+        const payload = await ChessApi.listGames();
+        historyRecords = normalizeHistoryGames(payload?.games);
+        historyLoaded = true;
+    } catch (error) {
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+        }
+        historyRecords = [];
+        historyLoaded = false;
+        historyLoadError = window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game history.';
+    } finally {
+        historyLoading = false;
+        renderHistoryList();
+    }
+}
+
 function renderHistoryList() {
     const list = document.getElementById('history-list');
     if (!list) return;
+
+    list.innerHTML = '';
+
+    if (!window.ChessApi?.hasToken?.()) {
+        renderHistoryStateMessage(list, 'Log in to view your game history.');
+        return;
+    }
+
+    if (historyLoading) {
+        renderHistoryStateMessage(list, 'Loading games from backend...');
+        return;
+    }
+
+    if (historyLoadError) {
+        renderHistoryStateMessage(list, historyLoadError, {
+            actionLabel: 'Retry',
+            onAction: () => loadHistoryList({ force: true })
+        });
+        return;
+    }
 
     const records = historyRecords
         .filter(record => historyFilters.size === 0 || historyFilters.has(record.result))
@@ -1300,12 +1367,9 @@ function renderHistoryList() {
             return historySortDirection === 'asc' ? diff : -diff;
         });
 
-    list.innerHTML = '';
     if (records.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'history-empty';
-        empty.textContent = 'No games yet';
-        list.appendChild(empty);
+        const message = historyRecords.length === 0 ? 'No backend games yet.' : 'No games match selected filters.';
+        renderHistoryStateMessage(list, message);
         return;
     }
 
@@ -1321,15 +1385,49 @@ function renderHistoryList() {
 
         const meta = document.createElement('span');
         meta.className = 'history-card-meta';
-        meta.innerHTML = `
-            <strong>${resultLabel(record.result)} vs ${record.opponent}</strong>
-            <span>${record.boardSize}×${record.boardSize} · ${record.timeControl}</span>
-            <span>${formatHistoryDate(record.timestamp)}</span>
-        `;
+
+        const title = document.createElement('strong');
+        title.textContent = `${resultLabel(record.result)} vs ${record.opponent}`;
+
+        const format = document.createElement('span');
+        format.textContent = `${modeLabel(record.mode, record.boardSize)} · ${record.timeControl} · ${record.isRanked ? 'ranked' : 'casual'}`;
+
+        const timestamp = document.createElement('span');
+        timestamp.textContent = formatHistoryDate(record.timestamp);
+
+        meta.append(title, format, timestamp);
 
         button.append(board, meta);
         list.appendChild(button);
     });
+}
+
+function renderHistoryStateMessage(list, message, action = null) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    empty.appendChild(text);
+
+    if (action?.actionLabel && typeof action.onAction === 'function') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'mini-action-btn history-retry-btn';
+        button.textContent = action.actionLabel;
+        button.addEventListener('click', action.onAction);
+        empty.appendChild(button);
+    }
+
+    list.appendChild(empty);
+}
+
+function resetHistoryState() {
+    historyRecords = [];
+    historyLoaded = false;
+    historyLoading = false;
+    historyLoadError = '';
+    activeHistoryDetailRequest += 1;
 }
 
 function clearLocalHistoryRecords() {
@@ -1340,23 +1438,86 @@ function clearLocalHistoryRecords() {
     }
 }
 
-function openHistoryGame(recordId) {
-    const record = historyRecords.find(item => item.id === recordId) || historyRecords[0];
-    if (!record) return;
+async function openHistoryGame(recordId) {
+    const summary = historyRecords.find(item => item.id === recordId);
+    if (!recordId || !window.ChessApi?.hasToken?.()) return;
 
     navigateTo('page-history-detail');
+    const requestId = activeHistoryDetailRequest + 1;
+    activeHistoryDetailRequest = requestId;
+
+    renderHistoryDetailLoading(summary);
+
+    try {
+        const payload = await ChessApi.getGame(recordId);
+        if (activeHistoryDetailRequest !== requestId) return;
+
+        const detail = normalizeHistoryGame(payload);
+        updateHistoryRecord(detail);
+        renderHistoryDetail(detail);
+    } catch (error) {
+        if (activeHistoryDetailRequest !== requestId) return;
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            resetHistoryState();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+        }
+        renderHistoryDetailError(window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game.');
+    }
+}
+
+function renderHistoryDetailLoading(record = null) {
     const title = document.getElementById('history-detail-title');
-    const accuracy = document.getElementById('history-accuracy');
+    const format = document.getElementById('history-accuracy');
     const result = document.getElementById('history-result');
-    const opening = document.getElementById('history-opening');
+    const status = document.getElementById('history-opening');
+
+    if (title) title.textContent = record ? `Game vs ${record.opponent}` : 'Loading game';
+    if (format) format.textContent = record ? historyFormatLabel(record) : '-';
+    if (result) result.textContent = record ? resultLabel(record.result) : '-';
+    if (status) status.textContent = 'Loading...';
+
+    renderHistoryAnalysisBoard(record);
+    renderHistoryMoveList({ moves: [] }, 'Loading moves...');
+}
+
+function renderHistoryDetail(record) {
+    const title = document.getElementById('history-detail-title');
+    const format = document.getElementById('history-accuracy');
+    const result = document.getElementById('history-result');
+    const status = document.getElementById('history-opening');
 
     if (title) title.textContent = `Game vs ${record.opponent}`;
-    if (accuracy) accuracy.textContent = record.accuracy;
+    if (format) format.textContent = historyFormatLabel(record);
     if (result) result.textContent = resultLabel(record.result);
-    if (opening) opening.textContent = record.opening;
+    if (status) status.textContent = historyStatusLabel(record);
 
     renderHistoryAnalysisBoard(record);
     renderHistoryMoveList(record);
+}
+
+function renderHistoryDetailError(message) {
+    const title = document.getElementById('history-detail-title');
+    const format = document.getElementById('history-accuracy');
+    const result = document.getElementById('history-result');
+    const status = document.getElementById('history-opening');
+
+    if (title) title.textContent = 'Game unavailable';
+    if (format) format.textContent = '-';
+    if (result) result.textContent = '-';
+    if (status) status.textContent = 'Error';
+
+    const host = document.getElementById('history-analysis-board');
+    if (host) {
+        host.innerHTML = '';
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = message;
+        host.appendChild(empty);
+    }
+
+    renderHistoryMoveList({ moves: [] }, message);
 }
 
 function renderHistoryMiniBoard(host, size) {
@@ -1374,17 +1535,24 @@ function renderHistoryAnalysisBoard(record) {
     if (!host) return;
 
     host.innerHTML = '';
-    const position = buildVisualPosition(8);
+    const size = clampHistoryBoardSize(record?.boardSize || record?.boardState?.board_size || record?.boardState?.board?.width || 8);
+    const position = backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || []);
     const grid = document.createElement('div');
     grid.className = 'history-board-grid';
+    grid.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
+    grid.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`;
 
-    for (let row = 0; row < 8; row += 1) {
-        for (let col = 0; col < 8; col += 1) {
+    for (let row = 0; row < size; row += 1) {
+        for (let col = 0; col < size; col += 1) {
             const square = document.createElement('span');
-            const key = squareKey(row, col);
+            const key = historySquareName(row, col, size);
             square.className = `history-board-square ${(row + col) % 2 === 0 ? 'mini-light' : 'mini-dark'}`;
+            square.title = key;
+
+            appendHistoryNotation(square, row, col, size);
+
             const piece = position[key];
-            if (piece && (row < 2 || row > 5)) {
+            if (piece) {
                 const img = document.createElement('img');
                 img.src = getPieceSrc(piece);
                 img.alt = '';
@@ -1394,19 +1562,35 @@ function renderHistoryAnalysisBoard(record) {
         }
     }
 
-    host.dataset.meta = `${record.boardSize}×${record.boardSize}`;
+    host.dataset.meta = `${size}×${size}`;
     host.appendChild(grid);
 }
 
-function renderHistoryMoveList(record) {
+function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this game.') {
     const list = document.getElementById('history-move-list');
     if (!list) return;
 
     list.innerHTML = '';
-    record.moves.forEach((move, index) => {
+    const moves = Array.isArray(record?.moves) ? record.moves : [];
+    if (moves.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'history-empty history-moves-empty';
+        empty.textContent = emptyMessage;
+        list.appendChild(empty);
+        return;
+    }
+
+    moves.forEach((move, index) => {
         const row = document.createElement('div');
         row.className = 'history-move-row';
-        row.innerHTML = `<span>${index + 1}</span><strong>${move}</strong>`;
+
+        const number = document.createElement('span');
+        number.textContent = String(index + 1);
+
+        const text = document.createElement('strong');
+        text.textContent = formatHistoryMove(move);
+
+        row.append(number, text);
         list.appendChild(row);
     });
 }
@@ -1414,16 +1598,179 @@ function renderHistoryMoveList(record) {
 function resultLabel(result) {
     if (result === 'win') return 'Win';
     if (result === 'loss') return 'Loss';
-    return 'Draw';
+    if (result === 'draw') return 'Draw';
+    if (result === 'active') return 'Active';
+    return 'Unknown';
 }
 
 function formatHistoryDate(timestamp) {
+    if (!timestamp) return '-';
     return new Date(timestamp).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
     });
+}
+
+function normalizeHistoryGames(games = []) {
+    if (!Array.isArray(games)) return [];
+    return games.map(normalizeHistoryGame).filter(record => record.id);
+}
+
+function normalizeHistoryGame(game = {}) {
+    const boardState = normalizeHistoryBoardState(game.board_state);
+    const boardSize = clampHistoryBoardSize(game.board_size || boardState.board_size || boardState.board?.width || boardState.board?.height || 8);
+    const timeLimitMs = Number(game.time_limit_ms || 0);
+    const opponent = game.opponent?.username || game.opponent?.id || fallbackOpponentName(game);
+    const timestamp = game.created_at || game.updated_at || '';
+
+    return {
+        id: game.id || '',
+        mode: game.mode || modeForBoardSize(boardSize),
+        boardSize,
+        timeLimitMs,
+        timeControl: formatTimeControl(timeLimitMs),
+        isRanked: Boolean(game.is_ranked),
+        status: game.status || boardState.status || 'unknown',
+        turn: game.turn || boardState.turn || '',
+        playerColor: game.player_color || '',
+        result: normalizeHistoryResult(game.result, game.status || boardState.status, game.player_color),
+        opponent,
+        white: game.white || null,
+        black: game.black || null,
+        winnerId: game.winner_id || null,
+        timestamp,
+        boardState,
+        moves: normalizeHistoryMoves(boardState.moves)
+    };
+}
+
+function normalizeHistoryBoardState(boardState) {
+    if (!boardState) return {};
+    if (typeof boardState === 'string') {
+        try {
+            return JSON.parse(boardState);
+        } catch {
+            return {};
+        }
+    }
+    if (typeof boardState === 'object') {
+        return boardState;
+    }
+    return {};
+}
+
+function normalizeHistoryMoves(moves) {
+    if (!Array.isArray(moves)) return [];
+    return moves
+        .filter(move => move?.from && move?.to)
+        .map(move => ({
+            from: move.from,
+            to: move.to,
+            piece: move.piece || null,
+            captured: move.captured || null
+        }));
+}
+
+function normalizeHistoryResult(result, status = '', playerColor = '') {
+    if (result === 'win' || result === 'loss' || result === 'draw' || result === 'active') {
+        return result;
+    }
+
+    const normalizedStatus = String(status || '');
+    if (normalizedStatus === 'active') return 'active';
+    if (normalizedStatus.includes('draw')) return 'draw';
+
+    const whiteWon = normalizedStatus.startsWith('white_won');
+    const blackWon = normalizedStatus.startsWith('black_won');
+    if (!whiteWon && !blackWon) return 'unknown';
+
+    if (!playerColor) return 'unknown';
+    return (whiteWon && playerColor === 'white') || (blackWon && playerColor === 'black') ? 'win' : 'loss';
+}
+
+function updateHistoryRecord(detail) {
+    if (!detail?.id) return;
+    const index = historyRecords.findIndex(record => record.id === detail.id);
+    if (index >= 0) {
+        historyRecords[index] = { ...historyRecords[index], ...detail };
+    } else {
+        historyRecords.unshift(detail);
+    }
+}
+
+function fallbackOpponentName(game) {
+    if (game.player_color === 'black') return game.white?.username || game.white?.id || 'White';
+    return game.black?.username || game.black?.id || 'Black';
+}
+
+function formatTimeControl(timeLimitMs) {
+    const ms = Number(timeLimitMs || 0);
+    if (ms <= 0) return 'unknown time';
+    const minutes = ms / 60000;
+    if (Number.isInteger(minutes)) return `${minutes} min`;
+    return `${Math.round(ms / 1000)} sec`;
+}
+
+function historyFormatLabel(record) {
+    return `${modeLabel(record.mode, record.boardSize)} · ${record.timeControl}`;
+}
+
+function historyStatusLabel(record) {
+    const ranked = record.isRanked ? 'ranked' : 'casual';
+    return `${record.status || 'unknown'} · ${ranked}`;
+}
+
+function backendPiecesToHistoryPosition(pieces) {
+    if (!Array.isArray(pieces)) return {};
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        if (code && piece.square) {
+            position[piece.square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function historySquareName(row, col, size) {
+    return `${fileLabel(col)}${size - row}`;
+}
+
+function appendHistoryNotation(square, row, col, size) {
+    if (col === 0) {
+        const rank = document.createElement('span');
+        rank.className = 'history-notation history-numeric';
+        rank.textContent = String(size - row);
+        square.appendChild(rank);
+    }
+
+    if (row === size - 1) {
+        const file = document.createElement('span');
+        file.className = 'history-notation history-alpha';
+        file.textContent = fileLabel(col);
+        square.appendChild(file);
+    }
+}
+
+function clampHistoryBoardSize(size) {
+    const parsed = Number(size);
+    if (parsed === 10 || parsed === 12) return parsed;
+    return 8;
+}
+
+function formatHistoryMove(move) {
+    const color = move.piece?.color ? `${capitalize(move.piece.color)} ` : '';
+    const piece = move.piece?.type || 'piece';
+    const capture = move.captured
+        ? ` captures ${move.captured.color || ''} ${move.captured.type || 'piece'}`.replace(/\s+/g, ' ').trimEnd()
+        : '';
+    return `${color}${piece} ${move.from} -> ${move.to}${capture}`;
+}
+
+function capitalize(value) {
+    const text = String(value || '');
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
 }
 
 function renderEmojiMessages() {
@@ -1512,12 +1859,14 @@ function bindAccountForm() {
 
             if (passwordInput) passwordInput.value = '';
             applyBackendAccountProfile(profile);
+            resetHistoryState();
             accountEditing = false;
             renderAccountProfile();
             showAccountMessage('Logged in.');
         } catch (error) {
             if (error?.status === 401) {
                 ChessApi.clearToken();
+                resetHistoryState();
                 accountProfile = createEmptyAccountProfile();
                 renderAccountProfile();
             }
@@ -1553,6 +1902,7 @@ function bindAccountForm() {
         window.ChessSocket?.close?.();
         ChessApi.logout();
         clearLegacyAccountProfile();
+        resetHistoryState();
         accountProfile = createEmptyAccountProfile();
         activeMatchRequest = null;
         queuedForMatch = false;
@@ -1648,6 +1998,7 @@ function applyBackendAccountProfile(profile) {
 
 async function refreshAccountFromBackend({ showMessages = false } = {}) {
     if (!window.ChessApi?.hasToken?.()) {
+        resetHistoryState();
         accountProfile = createEmptyAccountProfile();
         renderAccountProfile();
         return false;
@@ -1669,6 +2020,7 @@ async function refreshAccountFromBackend({ showMessages = false } = {}) {
     } catch (error) {
         if (error?.status === 401) {
             ChessApi.clearToken();
+            resetHistoryState();
             accountProfile = createEmptyAccountProfile();
             renderAccountProfile();
             showAccountMessage(showMessages ? 'Session expired. Log in again.' : '');
