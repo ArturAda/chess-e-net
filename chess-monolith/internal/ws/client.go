@@ -246,38 +246,13 @@ func (c *Client) ReadPump() {
 			}
 
 		case "DRAW_OFFER":
-			if c.ActiveGame != nil && c.Opponent != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
-
-				if status == "active" {
-					// Пересылаем предложение оппоненту
-					c.Opponent.SendMessage(MessageTypeDrawOffer, nil)
-					log.Printf("Player %s offered a draw.", c.UserID)
-				}
-			}
+			c.handleDrawOffer()
 
 		case "DRAW_ACCEPT":
-			if c.ActiveGame != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
-
-				if status == "active" {
-					log.Printf("Player %s accepted the draw.", c.UserID)
-					// Метод processGameEnd сам всё сохранит, пересчитает Эло
-					// и разошлет финальный GAME_STATE обоим игрокам
-					c.ActiveGame.EndGame("draw")
-				}
-			}
+			c.handleDrawAccept()
 
 		case "DRAW_DECLINE":
-			if c.ActiveGame != nil && c.Opponent != nil {
-				// Уведомляем первого игрока, что ничья отклонена
-				c.Opponent.SendMessage(MessageTypeDrawDecline, nil)
-				log.Printf("Player %s declined the draw.", c.UserID)
-			}
+			c.handleDrawDecline()
 
 		default:
 			log.Printf("Unknown message type: %s", wsMsg.Type)

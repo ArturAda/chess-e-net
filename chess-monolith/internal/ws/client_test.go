@@ -1,6 +1,8 @@
 package ws
 
 import (
+	"chess-monolith/internal/game/core"
+	"chess-monolith/internal/game/session"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -47,6 +49,41 @@ func readWSMessage(t *testing.T, conn *websocket.Conn) Message {
 	var msg Message
 	require.NoError(t, conn.ReadJSON(&msg))
 	return msg
+}
+
+func readClientMessage(t *testing.T, ch <-chan []byte) Message {
+	t.Helper()
+
+	select {
+	case raw := <-ch:
+		var msg Message
+		require.NoError(t, json.Unmarshal(raw, &msg))
+		return msg
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for client message")
+		return Message{}
+	}
+}
+
+func newDrawTestClients() (*Client, *Client, *session.GameSession) {
+	game := &session.GameSession{Status: "active"}
+	white := &Client{
+		Send:       make(chan []byte, 16),
+		UserID:     "white-user",
+		Username:   "White",
+		ActiveGame: game,
+		Color:      core.White,
+	}
+	black := &Client{
+		Send:       make(chan []byte, 16),
+		UserID:     "black-user",
+		Username:   "Black",
+		ActiveGame: game,
+		Color:      core.Black,
+	}
+	white.Opponent = black
+	black.Opponent = white
+	return white, black, game
 }
 
 func TestClient_WritePump(t *testing.T) {
@@ -467,4 +504,95 @@ func TestClient_ReadPump_Move(t *testing.T) {
 	assert.Equal(t, "e4", payload.To)
 
 	assert.Equal(t, 1, hub.Len(), "Client should survive a MOVE payload parse")
+}
+
+func TestClient_DrawOfferSendsPayloadToBothPlayers(t *testing.T) {
+	white, black, game := newDrawTestClients()
+
+	white.handleDrawOffer()
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeDrawOffer, whiteMsg.Type)
+	assert.Equal(t, MessageTypeDrawOffer, blackMsg.Type)
+	require.NotNil(t, game.DrawOffer)
+
+	var payload DrawOfferPayload
+	require.NoError(t, json.Unmarshal(whiteMsg.Payload, &payload))
+	assert.Equal(t, game.DrawOffer.ID, payload.OfferID)
+	assert.Equal(t, "white", payload.OfferedBy)
+	assert.Equal(t, "white-user", payload.OfferedByUserID)
+	assert.Greater(t, payload.ExpiresInMs, int64(0))
+	assert.LessOrEqual(t, payload.ExpiresInMs, session.DrawOfferTTL.Milliseconds())
+	assert.Equal(t, "white offered a draw.", payload.Message)
+}
+
+func TestClient_DrawAcceptEndsGameAndNotifiesBothPlayers(t *testing.T) {
+	white, black, game := newDrawTestClients()
+	white.handleDrawOffer()
+	readClientMessage(t, white.Send)
+	readClientMessage(t, black.Send)
+
+	black.handleDrawAccept()
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeDrawAccepted, whiteMsg.Type)
+	assert.Equal(t, MessageTypeDrawAccepted, blackMsg.Type)
+	assert.Equal(t, "draw", game.Status)
+
+	var payload DrawOfferResultPayload
+	require.NoError(t, json.Unmarshal(blackMsg.Payload, &payload))
+	assert.Equal(t, "white", payload.OfferedBy)
+	assert.Equal(t, "black", payload.RespondedBy)
+	assert.Equal(t, "black-user", payload.RespondedByUserID)
+	assert.Equal(t, "Draw offer accepted.", payload.Message)
+}
+
+func TestClient_DrawDeclineClearsOfferAndNotifiesBothPlayers(t *testing.T) {
+	white, black, game := newDrawTestClients()
+	white.handleDrawOffer()
+	readClientMessage(t, white.Send)
+	readClientMessage(t, black.Send)
+
+	black.handleDrawDecline()
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeDrawDecline, whiteMsg.Type)
+	assert.Equal(t, MessageTypeDrawDecline, blackMsg.Type)
+	assert.Nil(t, game.DrawOffer)
+	assert.Equal(t, "active", game.Status)
+}
+
+func TestClient_DrawOffererCannotAcceptOwnOffer(t *testing.T) {
+	white, black, game := newDrawTestClients()
+	white.handleDrawOffer()
+	readClientMessage(t, white.Send)
+	readClientMessage(t, black.Send)
+
+	white.handleDrawAccept()
+
+	msg := readClientMessage(t, white.Send)
+	assert.Equal(t, MessageTypeError, msg.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, ErrorCodeDrawOfferState, payload.Code)
+	assert.Equal(t, "You cannot respond to your own draw offer", payload.Message)
+	require.NotNil(t, game.DrawOffer)
+}
+
+func TestClient_DrawOfferExpirationNotifiesBothPlayers(t *testing.T) {
+	white, black, game := newDrawTestClients()
+	offer, err := game.CreateDrawOffer(core.White, white.UserID, time.Now().Add(-session.DrawOfferTTL-time.Millisecond))
+	require.NoError(t, err)
+
+	white.scheduleDrawOfferExpiration(offer)
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypeDrawExpired, whiteMsg.Type)
+	assert.Equal(t, MessageTypeDrawExpired, blackMsg.Type)
+	assert.Nil(t, game.DrawOffer)
 }

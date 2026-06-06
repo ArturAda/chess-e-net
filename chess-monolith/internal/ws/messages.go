@@ -14,7 +14,9 @@ const (
 	MessageTypeMoveRejected = "MOVE_REJECTED"
 	MessageTypeError        = "ERROR"
 	MessageTypeDrawOffer    = "DRAW_OFFER"
+	MessageTypeDrawAccepted = "DRAW_ACCEPTED"
 	MessageTypeDrawDecline  = "DRAW_DECLINE"
+	MessageTypeDrawExpired  = "DRAW_EXPIRED"
 )
 
 const (
@@ -26,6 +28,8 @@ const (
 	ErrorCodeNotYourTurn     = "NOT_YOUR_TURN"
 	ErrorCodeInvalidMove     = "INVALID_MOVE"
 	ErrorCodeGameAlreadyOver = "GAME_ALREADY_OVER"
+	ErrorCodeDrawOfferActive = "DRAW_OFFER_ACTIVE"
+	ErrorCodeDrawOfferState  = "DRAW_OFFER_STATE"
 	ErrorCodeInternal        = "INTERNAL_ERROR"
 )
 
@@ -64,6 +68,24 @@ type MoveRejectedPayload struct {
 	Code        string `json:"code"`
 	Message     string `json:"message"`
 	Recoverable bool   `json:"recoverable"`
+}
+
+type DrawOfferPayload struct {
+	OfferID         string    `json:"offer_id"`
+	OfferedBy       string    `json:"offered_by"`
+	OfferedByUserID string    `json:"offered_by_user_id"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	ExpiresInMs     int64     `json:"expires_in_ms"`
+	Message         string    `json:"message"`
+}
+
+type DrawOfferResultPayload struct {
+	OfferID           string `json:"offer_id"`
+	OfferedBy         string `json:"offered_by"`
+	OfferedByUserID   string `json:"offered_by_user_id"`
+	RespondedBy       string `json:"responded_by,omitempty"`
+	RespondedByUserID string `json:"responded_by_user_id,omitempty"`
+	Message           string `json:"message"`
 }
 
 type ProtocolError struct {

@@ -25,6 +25,8 @@ type GameSession struct {
 
 	StopTimer chan struct{}
 
+	DrawOffer *DrawOfferState
+
 	OnGameEnd func(finalStatus string)
 	isEnded   bool
 }
@@ -386,6 +388,7 @@ func (s *GameSession) EndGame(finalStatus string) {
 
 	s.isEnded = true
 	s.Status = finalStatus
+	s.DrawOffer = nil
 	s.Mu.Unlock()
 
 	if s.OnGameEnd != nil {
