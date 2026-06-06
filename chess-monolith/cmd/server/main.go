@@ -2,7 +2,10 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"chess-monolith/internal/game"
 	"chess-monolith/internal/game/core"
@@ -58,7 +61,39 @@ func SetupRouter(userHandler *users.Handler, hub *ws.Hub, userRepo users.Reposit
 		game.NewHandler(gameRepo, userRepo, jwtSecret).SetupRoutes(router)
 	}
 
+	setupFrontendStatic(router, os.Getenv("FRONTEND_DIST_DIR"))
+
 	return router
+}
+
+func setupFrontendStatic(router *gin.Engine, distDir string) {
+	if distDir == "" {
+		distDir = "frontend/dist"
+	}
+
+	indexFile := filepath.Join(distDir, "index.html")
+	if _, err := os.Stat(indexFile); err != nil {
+		log.Printf("Frontend static files disabled: %s not found", indexFile)
+		return
+	}
+
+	router.NoRoute(func(c *gin.Context) {
+		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") || c.Request.URL.Path == "/ws" || strings.HasPrefix(c.Request.URL.Path, "/ws/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "Not found"})
+			return
+		}
+
+		requestedPath := strings.TrimPrefix(filepath.Clean(c.Request.URL.Path), string(filepath.Separator))
+		if requestedPath != "." && requestedPath != "" {
+			staticFile := filepath.Join(distDir, requestedPath)
+			if info, err := os.Stat(staticFile); err == nil && !info.IsDir() {
+				c.File(staticFile)
+				return
+			}
+		}
+
+		c.File(indexFile)
+	})
 }
 
 func main() {
