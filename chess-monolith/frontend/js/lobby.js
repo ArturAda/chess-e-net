@@ -739,11 +739,15 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
 
     if (size === 8) {
         currentCustomPosition = null;
+        const initialClassicPosition = isMatchmakingSearchPreview()
+            ? {}
+            : preservedClassicPosition || 'start';
         host.style.width = 'var(--classic-board-size)';
         board = Chessboard('myBoard', {
             draggable: true,
             dropOffBoard: 'snapback',
-            position: preservedClassicPosition || 'start',
+            orientation: currentBoardOrientation(),
+            position: initialClassicPosition,
             pieceTheme: pieceTheme,
             onDragStart: handleClassicDragStart,
             onDrop: handleClassicDrop,
@@ -755,7 +759,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
     }
 
     if (resetPosition || !currentCustomPosition) {
-        currentCustomPosition = buildVisualPosition(size);
+        currentCustomPosition = isMatchmakingSearchPreview() ? {} : buildVisualPosition(size);
         selectedCustomSquare = null;
     }
     renderCustomBoard(host, size, currentCustomPosition);
@@ -858,6 +862,8 @@ function handleMatchFound(payload) {
         renderClassicBoard(boardSize, minutes, true, false, mode);
     }
 
+    syncRenderedBoardOrientation(boardSize);
+
     const colorLabel = currentPlayerColor || 'unknown color';
     const opponent = payload?.opponent?.username || 'opponent';
     setMatchmakingStatus(`Match found vs ${opponent}. You play ${colorLabel}.`);
@@ -885,6 +891,7 @@ function handleGameState(gameState) {
     );
 
     ensureBoardForGameState(boardSize, minutes, mode);
+    syncRenderedBoardOrientation(boardSize);
     applyPositionFromGameState(gameState, boardSize, animateConfirmedClassicMove);
     pendingClassicMove = null;
     applyCapturedPiecesFromGameState(gameState);
@@ -961,6 +968,31 @@ function ensureBoardForGameState(boardSize, timeControlMinutes, mode) {
 
     if (needsRender) {
         renderClassicBoard(boardSize, timeControlMinutes, true, false, mode);
+    }
+}
+
+function currentBoardOrientation() {
+    return currentPlayerColor === 'black' ? 'black' : 'white';
+}
+
+function isMatchmakingSearchPreview() {
+    return Boolean(activeMatchRequest && !activeRemoteGame && !currentGameState);
+}
+
+function syncRenderedBoardOrientation(boardSize = currentVisualBoardSize) {
+    const orientation = currentBoardOrientation();
+
+    if (boardSize === 8 && board) {
+        if (board.orientation() !== orientation) {
+            board.orientation(orientation);
+            paintRenderedClassicSquares();
+            requestAnimationFrame(paintRenderedClassicSquares);
+        }
+        return;
+    }
+
+    if (boardSize && boardSize !== 8 && currentCustomPosition) {
+        refreshCurrentBoard(false);
     }
 }
 
@@ -2353,17 +2385,21 @@ function refreshCurrentBoard(resetPosition = false) {
 function renderCustomBoard(host, size, position) {
     const lightSquare = getSquareStrategy(settings.lightSquareStrategyId);
     const darkSquare = getSquareStrategy(settings.darkSquareStrategyId);
+    const orientation = currentBoardOrientation();
     const grid = document.createElement('div');
     grid.className = 'custom-board';
     grid.dataset.size = String(size);
+    grid.dataset.orientation = orientation;
     grid.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
     grid.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`;
 
     for (let row = 0; row < size; row += 1) {
         for (let col = 0; col < size; col += 1) {
             const square = document.createElement('div');
-            const key = squareKey(row, col);
-            const strategy = (row + col) % 2 === 0 ? lightSquare : darkSquare;
+            const logicalRow = customLogicalIndex(row, size, orientation);
+            const logicalCol = customLogicalIndex(col, size, orientation);
+            const key = squareKey(logicalRow, logicalCol);
+            const strategy = (logicalRow + logicalCol) % 2 === 0 ? lightSquare : darkSquare;
 
             square.className = 'custom-square';
             if (selectedCustomSquare === key) {
@@ -2376,7 +2412,7 @@ function renderCustomBoard(host, size, position) {
             square.addEventListener('drop', handleCustomDrop);
             square.addEventListener('click', handleCustomSquareClick);
 
-            appendCustomNotation(square, row, col, size);
+            appendCustomNotation(square, row, col, logicalRow, logicalCol, size);
 
             const piece = position[key];
             if (piece) {
@@ -2398,18 +2434,22 @@ function renderCustomBoard(host, size, position) {
     host.appendChild(grid);
 }
 
-function appendCustomNotation(square, row, col, size) {
-    if (col === 0) {
+function customLogicalIndex(index, size, orientation = currentBoardOrientation()) {
+    return orientation === 'black' ? size - 1 - index : index;
+}
+
+function appendCustomNotation(square, visualRow, visualCol, logicalRow, logicalCol, size) {
+    if (visualCol === 0) {
         const rank = document.createElement('span');
         rank.className = 'custom-notation custom-numeric';
-        rank.textContent = String(size - row);
+        rank.textContent = String(size - logicalRow);
         square.appendChild(rank);
     }
 
-    if (row === size - 1) {
+    if (visualRow === size - 1) {
         const file = document.createElement('span');
         file.className = 'custom-notation custom-alpha';
-        file.textContent = fileLabel(col);
+        file.textContent = fileLabel(logicalCol);
         square.appendChild(file);
     }
 }
