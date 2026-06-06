@@ -1156,6 +1156,7 @@ body[data-background="dark-room"] .game-title::after {
 
 .history-empty {
     display: grid;
+    gap: 10px;
     min-height: 120px;
     place-items: center;
     border: 1px solid rgba(141,252,255,0.24);
@@ -1164,6 +1165,11 @@ body[data-background="dark-room"] .game-title::after {
     background: rgba(8,16,32,0.58);
     font-size: 22px;
     font-weight: 900;
+}
+
+.history-retry-btn {
+    width: auto;
+    min-width: 96px;
 }
 
 .history-game-card {
@@ -1200,6 +1206,11 @@ body[data-background="dark-room"] .game-title::after {
 
 .history-result-draw {
     border-left-color: #fff26d;
+}
+
+.history-result-active,
+.history-result-unknown {
+    border-left-color: #8dfcff;
 }
 
 .history-card-board {
@@ -1273,7 +1284,6 @@ body[data-background="dark-room"] .game-title::after {
 
 .history-board-grid {
     display: grid;
-    grid-template-columns: repeat(8, 1fr);
     aspect-ratio: 1;
     overflow: hidden;
     border-radius: 6px;
@@ -1289,6 +1299,28 @@ body[data-background="dark-room"] .game-title::after {
     width: 82%;
     height: 82%;
     object-fit: contain;
+    z-index: 1;
+}
+
+.history-notation {
+    position: absolute;
+    z-index: 2;
+    color: rgba(255,249,214,0.84);
+    font-size: 10px;
+    font-weight: 900;
+    line-height: 1;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.85);
+    pointer-events: none;
+}
+
+.history-numeric {
+    top: 3px;
+    left: 3px;
+}
+
+.history-alpha {
+    right: 3px;
+    bottom: 3px;
 }
 
 .history-analysis-panel {
@@ -1349,6 +1381,11 @@ body[data-background="dark-room"] .game-title::after {
 
 .history-move-row strong {
     color: #ecf0f1;
+}
+
+.history-moves-empty {
+    min-height: 74px;
+    font-size: 15px;
 }
 
 .white-1e1d7,
@@ -1760,6 +1797,44 @@ body > .piece-417db {
 .board-b72b1 {
     border: 2px solid rgba(255,255,255,0.32) !important;
     box-shadow: 0 14px 34px rgba(0,0,0,0.32), 0 0 22px rgba(141,252,255,0.16);
+}
+
+#myBoard .square-55d63.classic-move-source,
+#myBoard .square-55d63.classic-move-target,
+#myBoard .square-55d63.classic-capture-target {
+    position: relative !important;
+}
+
+#myBoard .square-55d63.classic-move-source::after,
+#myBoard .square-55d63.classic-move-target::after,
+#myBoard .square-55d63.classic-capture-target::after {
+    content: "";
+    position: absolute;
+    z-index: 6;
+    pointer-events: none;
+}
+
+#myBoard .square-55d63.classic-move-source::after {
+    inset: 0;
+    box-shadow: inset 0 0 0 4px rgba(255,242,109,0.95), inset 0 0 18px rgba(255,242,109,0.48);
+}
+
+#myBoard .square-55d63.classic-move-target::after {
+    top: 50%;
+    left: 50%;
+    width: 28%;
+    aspect-ratio: 1;
+    border-radius: 999px;
+    background: rgba(255,242,109,0.86);
+    box-shadow: 0 0 14px rgba(255,242,109,0.76), 0 0 0 5px rgba(42,34,4,0.12);
+    transform: translate(-50%, -50%);
+}
+
+#myBoard .square-55d63.classic-capture-target::after {
+    inset: 8%;
+    border: 4px solid rgba(255,242,109,0.96);
+    border-radius: 999px;
+    box-shadow: 0 0 16px rgba(255,242,109,0.82), inset 0 0 12px rgba(255,242,109,0.34);
 }
 
 .custom-board {

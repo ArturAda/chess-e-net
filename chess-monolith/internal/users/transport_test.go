@@ -27,6 +27,14 @@ func (m *MockService) Login(email, password string) (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockService) GetCurrentUser(token string) (*UserProfile, error) {
+	args := m.Called(token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*UserProfile), args.Error(1)
+}
+
 func TestHandler_Register_Scenarios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -209,4 +217,124 @@ func TestHandler_Register_InvalidJSONBody(t *testing.T) {
 	router.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
+}
+
+func TestHandler_Me_Scenarios(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		authHeader     string
+		setupMock      func(mockService *MockService)
+		expectedStatus int
+		assertBody     func(t *testing.T, body []byte)
+	}{
+		{
+			name:       "Success",
+			authHeader: "Bearer valid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUser", "valid-token").Return(&UserProfile{
+					ID:       "550e8400-e29b-41d4-a716-446655440000",
+					Username: "tester",
+					Email:    "test@mail.com",
+					Rating:   1200,
+				}, nil)
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body []byte) {
+				var resp map[string]any
+				err := json.Unmarshal(body, &resp)
+				if err != nil {
+					t.Fatalf("Failed to parse response: %v", err)
+				}
+
+				assert.Equal(t, "550e8400-e29b-41d4-a716-446655440000", resp["id"])
+				assert.Equal(t, "tester", resp["username"])
+				assert.Equal(t, "test@mail.com", resp["email"])
+				assert.Equal(t, float64(1200), resp["rating"])
+				assert.NotContains(t, resp, "password")
+				assert.NotContains(t, resp, "password_hash")
+				assert.NotContains(t, resp, "PasswordHash")
+			},
+		},
+		{
+			name:       "Missing Authorization Header",
+			authHeader: "",
+			setupMock: func(mockService *MockService) {
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Invalid Authorization Scheme",
+			authHeader: "Token valid-token",
+			setupMock: func(mockService *MockService) {
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Invalid Token",
+			authHeader: "Bearer invalid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUser", "invalid-token").Return(nil, ErrUnauthorized)
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Database Error",
+			authHeader: "Bearer valid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUser", "valid-token").Return(nil, ErrDatabase)
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(MockService)
+			tt.setupMock(mockService)
+
+			handler := NewHandler(mockService)
+			router := gin.Default()
+			handler.SetupRoutes(router)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/me", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+			if tt.assertBody != nil {
+				tt.assertBody(t, w.Body.Bytes())
+			}
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
+func TestBearerTokenFromHeader(t *testing.T) {
+	tests := []struct {
+		name      string
+		header    string
+		wantToken string
+		wantOK    bool
+	}{
+		{name: "valid", header: "Bearer token-value", wantToken: "token-value", wantOK: true},
+		{name: "valid with spaces", header: "Bearer   token-value   ", wantToken: "token-value", wantOK: true},
+		{name: "empty", header: "", wantOK: false},
+		{name: "wrong scheme", header: "Token token-value", wantOK: false},
+		{name: "missing token", header: "Bearer ", wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			token, ok := bearerTokenFromHeader(tt.header)
+
+			assert.Equal(t, tt.wantOK, ok)
+			assert.Equal(t, tt.wantToken, token)
+		})
+	}
 }

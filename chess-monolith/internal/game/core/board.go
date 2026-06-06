@@ -3,6 +3,7 @@ package core
 type MoveRecord struct {
 	From, To Pos
 	Piece    Piece
+	Captured *Piece
 }
 
 // Board хранит состояние доски в виде карты

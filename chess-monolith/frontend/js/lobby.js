@@ -3,7 +3,7 @@ const PIECES_ROOT = `${ASSET_ROOT}/сhess_pieces`;
 const USER_STYLES_KEY = 'chessemag_user_styles';
 const USER_STYLES_VERSION = 2;
 const CURRENT_SETTINGS_KEY = 'chessemag_current_settings';
-const ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
+const LEGACY_ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
 const ACCOUNT_AVATAR_SIZE = 256;
 const TIMER_ROOT = `${ASSET_ROOT}/timer`;
 const TIMER_DIGIT_ROOT = `${TIMER_ROOT}/digits`;
@@ -144,23 +144,41 @@ class MatchmakingStrategy {
     }
 }
 
-class LocalMatchmakingStrategy extends MatchmakingStrategy {
-    findMatch({ mode, boardSize, timeControlMinutes }) {
-        return Promise.resolve({
+class WebSocketMatchmakingStrategy extends MatchmakingStrategy {
+    async findMatch({ mode, boardSize, timeControlMinutes }) {
+        const token = window.ChessApi?.getToken?.();
+        if (!token) {
+            throw new Error('Log in before searching for a match.');
+        }
+
+        if (!window.ChessSocket) {
+            throw new Error('WebSocket client is not loaded.');
+        }
+
+        await ChessSocket.connect(token);
+        ChessSocket.joinQueue({
+            mode,
+            boardSize,
+            isRanked: false,
+            timeControlMinutes
+        });
+
+        return {
             mode,
             boardSize,
             timeControlMinutes,
             status: 'waiting',
-            message: `Searching for ${mode} ${boardSize}×${boardSize}, ${timeControlMinutes} min match.`
-        });
+            message: `Searching for ${modeLabel(mode, boardSize)} · ${timeControlMinutes} min.`
+        };
     }
 
     cancel() {
+        window.ChessSocket?.cancelQueue?.();
         return Promise.resolve({ status: 'cancelled' });
     }
 }
 
-const matchmakingClient = new LocalMatchmakingStrategy();
+const matchmakingClient = new WebSocketMatchmakingStrategy();
 
 const builtInPieceStrategies = [
     new BuiltInPieceStyleStrategy({
@@ -296,7 +314,7 @@ const emojiChatItems = [
     { id: 'rocket', name: 'Rocket mood', src: `${ASSET_ROOT}/smiles/rocket_mood.png` }
 ];
 
-const historyRecords = [];
+let historyRecords = [];
 const LEGACY_HISTORY_STORAGE_KEYS = [
     'chessemag_history',
     'chessemagHistory',
@@ -318,8 +336,22 @@ let selectedModernBoardSize = null;
 let selectedModernTimeMinutes = null;
 let capturedByMe = [];
 let capturedByOpponent = [];
+let activeMatchRequest = null;
+let queuedForMatch = false;
+let activeRemoteGame = false;
+let currentGameState = null;
+let currentPlayerColor = null;
+let currentGameId = null;
+let currentValidMoves = {};
+let pendingClassicMove = null;
+let classicSnapbackInProgress = false;
+let queuedClassicPositionUpdate = null;
 let historySortDirection = 'desc';
 let historyFilters = new Set();
+let historyLoaded = false;
+let historyLoading = false;
+let historyLoadError = '';
+let activeHistoryDetailRequest = 0;
 let timerState = null;
 let timerIntervalId = null;
 let matchNotFoundTimeoutId = null;
@@ -329,17 +361,19 @@ let emojiMessages = [];
 let userStyles = loadUserStyles();
 let settings = loadCurrentSettings();
 let accountProfile = loadAccountProfile();
-let accountPasswordVisible = false;
 let accountEditing = false;
 
 document.addEventListener('DOMContentLoaded', () => {
+    clearLegacyAccountProfile();
     clearLocalHistoryRecords();
     normalizeSettings();
     bindClassicSetupControls();
     bindModernSetupControls();
     bindHistoryControls();
+    bindSocketEvents();
     bindAccountForm();
     renderAccountProfile();
+    refreshAccountFromBackend();
     setAccountEntryVisibility('page-menu');
     setPageScrollMode('page-menu');
     applySelectedBackground();
@@ -383,7 +417,7 @@ function navigateTo(pageId) {
     }
 
     if (pageId === 'page-history') {
-        renderHistoryList();
+        loadHistoryList({ force: true });
     }
 
     if (pageId === 'page-settings') {
@@ -393,7 +427,6 @@ function navigateTo(pageId) {
 
     if (pageId === 'page-account') {
         accountEditing = false;
-        accountPasswordVisible = false;
         renderAccountProfile();
         showAccountMessage('');
     }
@@ -523,6 +556,39 @@ function spawnFallingPiece(layer) {
     layer.appendChild(piece);
 }
 
+function modeForBoardSize(boardSize) {
+    if (boardSize === 8) return 'classic';
+    if (boardSize === 10) return 'modern10';
+    if (boardSize === 12) return 'modern12';
+    return 'classic';
+}
+
+function modeLabel(mode, boardSize = null) {
+    if (mode === 'classic') return 'classic 8×8';
+    if (mode === 'modern10') return 'modern 10×10';
+    if (mode === 'modern12') return 'modern 12×12';
+    return boardSize ? `${mode} ${boardSize}×${boardSize}` : mode;
+}
+
+async function ensureMatchAuthentication() {
+    if (!window.ChessApi?.hasToken?.()) {
+        navigateTo('page-account');
+        showAccountMessage('Log in before searching for a match.');
+        return false;
+    }
+
+    if (!accountProfile.signedIn || !accountProfile.username) {
+        const refreshed = await refreshAccountFromBackend();
+        if (!refreshed) {
+            navigateTo('page-account');
+            showAccountMessage('Log in before searching for a match.');
+            return false;
+        }
+    }
+
+    return true;
+}
+
 function bindClassicSetupControls() {
     document.querySelectorAll('[data-time-control]').forEach(button => {
         button.addEventListener('click', () => {
@@ -531,8 +597,9 @@ function bindClassicSetupControls() {
         });
     });
 
-    document.getElementById('classic-start-btn')?.addEventListener('click', () => {
+    document.getElementById('classic-start-btn')?.addEventListener('click', async () => {
         if (!selectedClassicTimeMinutes) return;
+        if (!await ensureMatchAuthentication()) return;
         renderClassicBoard(8, selectedClassicTimeMinutes, true, true, 'classic');
     });
 }
@@ -552,12 +619,13 @@ function bindModernSetupControls() {
         });
     });
 
-    document.getElementById('modern-start-btn')?.addEventListener('click', () => {
+    document.getElementById('modern-start-btn')?.addEventListener('click', async () => {
         if (!selectedModernBoardSize || !selectedModernTimeMinutes) return;
+        if (!await ensureMatchAuthentication()) return;
         const boardSize = selectedModernBoardSize;
         const timeControl = selectedModernTimeMinutes;
         navigateTo('page-classic');
-        renderClassicBoard(boardSize, timeControl, true, true, 'modern');
+        renderClassicBoard(boardSize, timeControl, true, true, modeForBoardSize(boardSize));
     });
 }
 
@@ -605,6 +673,17 @@ function resetClassicEntry() {
     selectedCustomSquare = null;
     selectedClassicBoardSize = 8;
     selectedClassicTimeMinutes = null;
+    activeMatchRequest = null;
+    queuedForMatch = false;
+    activeRemoteGame = false;
+    currentGameState = null;
+    currentPlayerColor = null;
+    currentGameId = null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
+    clearClassicMoveHighlights();
     capturedByMe = [];
     capturedByOpponent = [];
     emojiMessages = [];
@@ -666,7 +745,9 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
             dropOffBoard: 'snapback',
             position: preservedClassicPosition || 'start',
             pieceTheme: pieceTheme,
-            onDrop: handleClassicDrop
+            onDragStart: handleClassicDragStart,
+            onDrop: handleClassicDrop,
+            onSnapbackEnd: handleClassicSnapbackEnd
         });
         paintRenderedClassicSquares();
         requestAnimationFrame(paintRenderedClassicSquares);
@@ -690,14 +771,304 @@ function destroyBoard() {
 
 function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode) {
     setMatchmakingStatus('Searching...');
-    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes }).then(result => {
-        if (currentGameMode !== mode || currentVisualBoardSize !== boardSize || currentTimeControlMinutes !== timeControlMinutes) return;
-        setMatchmakingStatus(result.message);
-    });
+    activeMatchRequest = { mode, boardSize, timeControlMinutes };
+    queuedForMatch = false;
+    activeRemoteGame = false;
+    currentGameState = null;
+    currentPlayerColor = null;
+    currentGameId = null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
+    clearClassicMoveHighlights();
+
+    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
+        .then(result => {
+            if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
+            setMatchmakingStatus(result.message);
+        })
+        .catch(error => {
+            if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
+            activeMatchRequest = null;
+            queuedForMatch = false;
+            pendingClassicMove = null;
+            classicSnapbackInProgress = false;
+            queuedClassicPositionUpdate = null;
+            clearClassicMoveHighlights();
+            stopGameTimer();
+            setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
+        });
 }
 
 function cancelMatchmaking() {
-    matchmakingClient.cancel();
+    if (queuedForMatch) {
+        matchmakingClient.cancel();
+    }
+    queuedForMatch = false;
+    activeMatchRequest = null;
+    pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
+    clearClassicMoveHighlights();
+}
+
+function isCurrentMatchRequest(mode, boardSize, timeControlMinutes) {
+    return activeMatchRequest?.mode === mode
+        && activeMatchRequest?.boardSize === boardSize
+        && activeMatchRequest?.timeControlMinutes === timeControlMinutes;
+}
+
+function bindSocketEvents() {
+    if (!window.ChessSocket) return;
+
+    ChessSocket.on('QUEUE_JOINED', handleQueueJoined);
+    ChessSocket.on('MATCH_FOUND', handleMatchFound);
+    ChessSocket.on('GAME_STATE', handleGameState);
+    ChessSocket.on('ERROR', handleSocketProtocolError);
+    ChessSocket.on('MOVE_REJECTED', handleMoveRejected);
+    ChessSocket.on('CLOSE', handleSocketClose);
+}
+
+function handleQueueJoined(payload) {
+    queuedForMatch = true;
+    const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
+    const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
+    const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes;
+    setMatchmakingStatus(`Searching for ${modeLabel(mode, boardSize)} · ${minutes} min.`);
+}
+
+function handleMatchFound(payload) {
+    queuedForMatch = false;
+    activeRemoteGame = true;
+    currentGameState = null;
+    currentGameId = payload?.game_id || null;
+    currentPlayerColor = payload?.player_color || null;
+    currentValidMoves = {};
+    pendingClassicMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
+    clearClassicMoveHighlights();
+
+    const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
+    const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes || 10;
+    const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
+
+    if (currentVisualBoardSize !== boardSize || currentGameMode !== mode) {
+        renderClassicBoard(boardSize, minutes, true, false, mode);
+    }
+
+    const colorLabel = currentPlayerColor || 'unknown color';
+    const opponent = payload?.opponent?.username || 'opponent';
+    setMatchmakingStatus(`Match found vs ${opponent}. You play ${colorLabel}.`);
+}
+
+function handleGameState(gameState) {
+    if (!gameState) return;
+
+    const boardSize = boardSizeFromGameState(gameState);
+    const animateConfirmedClassicMove = boardSize === 8 && isConfirmedPendingClassicMove(gameState);
+
+    activeRemoteGame = true;
+    queuedForMatch = false;
+    currentGameState = gameState;
+    currentGameId = gameState.game_id || currentGameId;
+    currentPlayerColor = gameState.player_color || currentPlayerColor;
+    currentValidMoves = normalizeValidMoves(gameState.valid_moves);
+    clearClassicMoveHighlights();
+
+    const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
+    const minutes = currentTimeControlMinutes || Math.max(
+        Math.ceil((gameState.white_time_left_ms || 0) / 60000),
+        Math.ceil((gameState.black_time_left_ms || 0) / 60000),
+        1
+    );
+
+    ensureBoardForGameState(boardSize, minutes, mode);
+    applyPositionFromGameState(gameState, boardSize, animateConfirmedClassicMove);
+    pendingClassicMove = null;
+    applyCapturedPiecesFromGameState(gameState);
+    startServerGameTimer(gameState);
+
+    const status = gameState.status || 'active';
+    const turnLabel = status === 'active'
+        ? (gameState.turn === currentPlayerColor ? 'Your turn' : 'Opponent turn')
+        : 'Game finished';
+    setMatchmakingStatus(`${status} · ${turnLabel}`);
+}
+
+function handleSocketProtocolError(payload) {
+    const message = payload?.message || 'WebSocket error.';
+    setMatchmakingStatus(message);
+
+    if (payload?.code === 'UNKNOWN_MODE') {
+        queuedForMatch = false;
+        activeMatchRequest = null;
+        currentGameState = null;
+        currentValidMoves = {};
+        pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
+        clearClassicMoveHighlights();
+        stopGameTimer();
+    }
+}
+
+function handleMoveRejected(payload) {
+    pendingClassicMove = null;
+    queuedClassicPositionUpdate = null;
+    clearClassicMoveHighlights();
+    setMatchmakingStatus(payload?.message || 'Move rejected.');
+}
+
+function handleSocketClose() {
+    if (queuedForMatch) {
+        queuedForMatch = false;
+        activeMatchRequest = null;
+        pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
+        clearClassicMoveHighlights();
+        stopGameTimer();
+        setMatchmakingStatus('Connection closed while searching.');
+    }
+}
+
+function boardSizeFromGameState(gameState) {
+    return gameState?.board_size
+        || gameState?.board?.width
+        || gameState?.board?.height
+        || currentVisualBoardSize
+        || 8;
+}
+
+function normalizeValidMoves(validMoves) {
+    return Object.entries(validMoves || {}).reduce((moves, [from, targets]) => {
+        if (Array.isArray(targets)) {
+            moves[from] = targets.filter(Boolean);
+        }
+        return moves;
+    }, {});
+}
+
+function ensureBoardForGameState(boardSize, timeControlMinutes, mode) {
+    const boardShell = document.getElementById('classic-board-shell');
+    const isBoardVisible = boardShell && !boardShell.classList.contains('hidden');
+    const needsRender = currentVisualBoardSize !== boardSize
+        || currentTimeControlMinutes !== timeControlMinutes
+        || currentGameMode !== mode
+        || !isBoardVisible;
+
+    if (needsRender) {
+        renderClassicBoard(boardSize, timeControlMinutes, true, false, mode);
+    }
+}
+
+function applyPositionFromGameState(gameState, boardSize, animateClassicMove = false) {
+    const pieces = gameState?.board?.pieces || [];
+    if (boardSize === 8) {
+        const position = backendPiecesToChessboardPosition(pieces);
+        if (!board) {
+            renderClassicBoard(boardSize, currentTimeControlMinutes || 10, true, false, currentGameMode);
+        }
+        if (animateClassicMove && classicSnapbackInProgress) {
+            queuedClassicPositionUpdate = { position, animate: true };
+            return;
+        }
+        queuedClassicPositionUpdate = null;
+        applyClassicBoardPosition(position, animateClassicMove);
+        return;
+    }
+
+    currentCustomPosition = backendPiecesToCustomPosition(pieces, boardSize);
+    selectedCustomSquare = null;
+    refreshCurrentBoard(false);
+}
+
+function applyClassicBoardPosition(position, animate = false) {
+    board?.position(position, animate);
+    paintRenderedClassicSquares();
+    requestAnimationFrame(paintRenderedClassicSquares);
+}
+
+function flushQueuedClassicPositionUpdate() {
+    const update = queuedClassicPositionUpdate;
+    if (!update) return;
+
+    queuedClassicPositionUpdate = null;
+    applyClassicBoardPosition(update.position, update.animate);
+}
+
+function isConfirmedPendingClassicMove(gameState) {
+    const lastMove = gameState?.last_move;
+    return Boolean(
+        pendingClassicMove
+        && lastMove?.from === pendingClassicMove.from
+        && lastMove?.to === pendingClassicMove.to
+    );
+}
+
+function backendPiecesToChessboardPosition(pieces) {
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        if (code && piece.square) {
+            position[piece.square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function backendPiecesToCustomPosition(pieces, boardSize) {
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        const square = backendSquareToCustomKey(piece.square, boardSize);
+        if (code && square) {
+            position[square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function backendPieceToFrontendCode(piece) {
+    if (!piece?.type || !piece?.color) return '';
+
+    const color = piece.color === 'white' ? 'w' : 'b';
+    const typeMap = {
+        pawn: 'P',
+        rook: 'R',
+        knight: 'N',
+        horse: 'N',
+        bishop: 'B',
+        queen: 'Q',
+        king: 'K'
+    };
+    const type = typeMap[piece.type];
+    return type ? `${color}${type}` : '';
+}
+
+function backendSquareToCustomKey(square, boardSize) {
+    if (!square || square.length < 2) return '';
+
+    const file = square.charCodeAt(0) - 'a'.charCodeAt(0);
+    const rank = Number(square.slice(1));
+    if (!Number.isInteger(rank) || file < 0 || file >= boardSize || rank < 1 || rank > boardSize) return '';
+
+    return squareKey(boardSize - rank, file);
+}
+
+function applyCapturedPiecesFromGameState(gameState) {
+    const capturedWhite = gameState?.captured_white || [];
+    const capturedBlack = gameState?.captured_black || [];
+
+    if (currentPlayerColor === 'black') {
+        capturedByMe = capturedWhite.map(backendPieceToFrontendCode).filter(Boolean);
+        capturedByOpponent = capturedBlack.map(backendPieceToFrontendCode).filter(Boolean);
+    } else {
+        capturedByMe = capturedBlack.map(backendPieceToFrontendCode).filter(Boolean);
+        capturedByOpponent = capturedWhite.map(backendPieceToFrontendCode).filter(Boolean);
+    }
+
+    renderCapturedPieces();
 }
 
 function setMatchmakingStatus(message) {
@@ -711,6 +1082,7 @@ function startGameTimer(timeControlMinutes) {
     const selectedSeconds = timeControlMinutes * 60;
     const searchSeconds = 60;
     timerState = {
+        mode: 'search',
         initialSeconds: searchSeconds,
         remaining: {
             opponent: selectedSeconds,
@@ -721,6 +1093,43 @@ function startGameTimer(timeControlMinutes) {
     };
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
     timerIntervalId = window.setInterval(tickGameTimer, 250);
+}
+
+function startServerGameTimer(gameState) {
+    if (!gameState) return;
+
+    if (timerIntervalId) {
+        window.clearInterval(timerIntervalId);
+        timerIntervalId = null;
+    }
+    if (matchNotFoundTimeoutId) {
+        window.clearTimeout(matchNotFoundTimeoutId);
+        matchNotFoundTimeoutId = null;
+    }
+
+    const whiteSeconds = Math.ceil((gameState.white_time_left_ms || 0) / 1000);
+    const blackSeconds = Math.ceil((gameState.black_time_left_ms || 0) / 1000);
+    const playerColor = gameState.player_color || currentPlayerColor || 'white';
+    const meSeconds = playerColor === 'white' ? whiteSeconds : blackSeconds;
+    const opponentSeconds = playerColor === 'white' ? blackSeconds : whiteSeconds;
+    const selectedSeconds = Math.max((currentTimeControlMinutes || 0) * 60, meSeconds, opponentSeconds, 1);
+
+    timerState = {
+        mode: 'game',
+        initialSeconds: selectedSeconds,
+        remaining: {
+            opponent: opponentSeconds,
+            me: meSeconds
+        },
+        active: gameState.turn === playerColor ? 'me' : 'opponent',
+        lastTickAt: Date.now()
+    };
+
+    renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
+
+    if (gameState.status === 'active') {
+        timerIntervalId = window.setInterval(tickGameTimer, 250);
+    }
 }
 
 function stopGameTimer() {
@@ -743,10 +1152,11 @@ function tickGameTimer() {
     if (elapsedSeconds < 1) return;
 
     timerState.lastTickAt += elapsedSeconds * 1000;
-    timerState.remaining.me = Math.max(0, timerState.remaining.me - elapsedSeconds);
+    const activeTimer = timerState.active || 'me';
+    timerState.remaining[activeTimer] = Math.max(0, timerState.remaining[activeTimer] - elapsedSeconds);
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
 
-    if (timerState.remaining.me === 0) {
+    if (timerState.mode === 'search' && timerState.remaining.me === 0) {
         window.clearInterval(timerIntervalId);
         timerIntervalId = null;
         showMatchNotFoundOverlay();
@@ -767,9 +1177,7 @@ function renderTimer(kind, seconds) {
     const digits = document.getElementById(`${kind}-timer-digits`);
     if (!timer || !digits) return;
 
-    const initial = kind === 'me'
-        ? timerState?.initialSeconds || 60
-        : Math.max(seconds, 1);
+    const initial = timerState?.initialSeconds || Math.max(seconds, 1);
     const isGood = seconds / initial >= 0.1;
     timer.classList.toggle('timer-good', isGood);
     timer.classList.toggle('timer-low', !isGood);
@@ -885,9 +1293,72 @@ function bindHistoryControls() {
     });
 }
 
+async function loadHistoryList({ force = false } = {}) {
+    const list = document.getElementById('history-list');
+    if (!list) return;
+
+    if (!window.ChessApi?.hasToken?.()) {
+        resetHistoryState();
+        renderHistoryList();
+        return;
+    }
+
+    if (historyLoading) {
+        renderHistoryList();
+        return;
+    }
+
+    if (historyLoaded && !force) {
+        renderHistoryList();
+        return;
+    }
+
+    historyLoading = true;
+    historyLoadError = '';
+    renderHistoryList();
+
+    try {
+        const payload = await ChessApi.listGames();
+        historyRecords = normalizeHistoryGames(payload?.games);
+        historyLoaded = true;
+    } catch (error) {
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+        }
+        historyRecords = [];
+        historyLoaded = false;
+        historyLoadError = window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game history.';
+    } finally {
+        historyLoading = false;
+        renderHistoryList();
+    }
+}
+
 function renderHistoryList() {
     const list = document.getElementById('history-list');
     if (!list) return;
+
+    list.innerHTML = '';
+
+    if (!window.ChessApi?.hasToken?.()) {
+        renderHistoryStateMessage(list, 'Log in to view your game history.');
+        return;
+    }
+
+    if (historyLoading) {
+        renderHistoryStateMessage(list, 'Loading games from backend...');
+        return;
+    }
+
+    if (historyLoadError) {
+        renderHistoryStateMessage(list, historyLoadError, {
+            actionLabel: 'Retry',
+            onAction: () => loadHistoryList({ force: true })
+        });
+        return;
+    }
 
     const records = historyRecords
         .filter(record => historyFilters.size === 0 || historyFilters.has(record.result))
@@ -896,12 +1367,9 @@ function renderHistoryList() {
             return historySortDirection === 'asc' ? diff : -diff;
         });
 
-    list.innerHTML = '';
     if (records.length === 0) {
-        const empty = document.createElement('div');
-        empty.className = 'history-empty';
-        empty.textContent = 'No games yet';
-        list.appendChild(empty);
+        const message = historyRecords.length === 0 ? 'No backend games yet.' : 'No games match selected filters.';
+        renderHistoryStateMessage(list, message);
         return;
     }
 
@@ -917,15 +1385,49 @@ function renderHistoryList() {
 
         const meta = document.createElement('span');
         meta.className = 'history-card-meta';
-        meta.innerHTML = `
-            <strong>${resultLabel(record.result)} vs ${record.opponent}</strong>
-            <span>${record.boardSize}×${record.boardSize} · ${record.timeControl}</span>
-            <span>${formatHistoryDate(record.timestamp)}</span>
-        `;
+
+        const title = document.createElement('strong');
+        title.textContent = `${resultLabel(record.result)} vs ${record.opponent}`;
+
+        const format = document.createElement('span');
+        format.textContent = `${modeLabel(record.mode, record.boardSize)} · ${record.timeControl} · ${record.isRanked ? 'ranked' : 'casual'}`;
+
+        const timestamp = document.createElement('span');
+        timestamp.textContent = formatHistoryDate(record.timestamp);
+
+        meta.append(title, format, timestamp);
 
         button.append(board, meta);
         list.appendChild(button);
     });
+}
+
+function renderHistoryStateMessage(list, message, action = null) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    empty.appendChild(text);
+
+    if (action?.actionLabel && typeof action.onAction === 'function') {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'mini-action-btn history-retry-btn';
+        button.textContent = action.actionLabel;
+        button.addEventListener('click', action.onAction);
+        empty.appendChild(button);
+    }
+
+    list.appendChild(empty);
+}
+
+function resetHistoryState() {
+    historyRecords = [];
+    historyLoaded = false;
+    historyLoading = false;
+    historyLoadError = '';
+    activeHistoryDetailRequest += 1;
 }
 
 function clearLocalHistoryRecords() {
@@ -936,23 +1438,86 @@ function clearLocalHistoryRecords() {
     }
 }
 
-function openHistoryGame(recordId) {
-    const record = historyRecords.find(item => item.id === recordId) || historyRecords[0];
-    if (!record) return;
+async function openHistoryGame(recordId) {
+    const summary = historyRecords.find(item => item.id === recordId);
+    if (!recordId || !window.ChessApi?.hasToken?.()) return;
 
     navigateTo('page-history-detail');
+    const requestId = activeHistoryDetailRequest + 1;
+    activeHistoryDetailRequest = requestId;
+
+    renderHistoryDetailLoading(summary);
+
+    try {
+        const payload = await ChessApi.getGame(recordId);
+        if (activeHistoryDetailRequest !== requestId) return;
+
+        const detail = normalizeHistoryGame(payload);
+        updateHistoryRecord(detail);
+        renderHistoryDetail(detail);
+    } catch (error) {
+        if (activeHistoryDetailRequest !== requestId) return;
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            resetHistoryState();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+        }
+        renderHistoryDetailError(window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game.');
+    }
+}
+
+function renderHistoryDetailLoading(record = null) {
     const title = document.getElementById('history-detail-title');
-    const accuracy = document.getElementById('history-accuracy');
+    const format = document.getElementById('history-accuracy');
     const result = document.getElementById('history-result');
-    const opening = document.getElementById('history-opening');
+    const status = document.getElementById('history-opening');
+
+    if (title) title.textContent = record ? `Game vs ${record.opponent}` : 'Loading game';
+    if (format) format.textContent = record ? historyFormatLabel(record) : '-';
+    if (result) result.textContent = record ? resultLabel(record.result) : '-';
+    if (status) status.textContent = 'Loading...';
+
+    renderHistoryAnalysisBoard(record);
+    renderHistoryMoveList({ moves: [] }, 'Loading moves...');
+}
+
+function renderHistoryDetail(record) {
+    const title = document.getElementById('history-detail-title');
+    const format = document.getElementById('history-accuracy');
+    const result = document.getElementById('history-result');
+    const status = document.getElementById('history-opening');
 
     if (title) title.textContent = `Game vs ${record.opponent}`;
-    if (accuracy) accuracy.textContent = record.accuracy;
+    if (format) format.textContent = historyFormatLabel(record);
     if (result) result.textContent = resultLabel(record.result);
-    if (opening) opening.textContent = record.opening;
+    if (status) status.textContent = historyStatusLabel(record);
 
     renderHistoryAnalysisBoard(record);
     renderHistoryMoveList(record);
+}
+
+function renderHistoryDetailError(message) {
+    const title = document.getElementById('history-detail-title');
+    const format = document.getElementById('history-accuracy');
+    const result = document.getElementById('history-result');
+    const status = document.getElementById('history-opening');
+
+    if (title) title.textContent = 'Game unavailable';
+    if (format) format.textContent = '-';
+    if (result) result.textContent = '-';
+    if (status) status.textContent = 'Error';
+
+    const host = document.getElementById('history-analysis-board');
+    if (host) {
+        host.innerHTML = '';
+        const empty = document.createElement('div');
+        empty.className = 'history-empty';
+        empty.textContent = message;
+        host.appendChild(empty);
+    }
+
+    renderHistoryMoveList({ moves: [] }, message);
 }
 
 function renderHistoryMiniBoard(host, size) {
@@ -970,17 +1535,24 @@ function renderHistoryAnalysisBoard(record) {
     if (!host) return;
 
     host.innerHTML = '';
-    const position = buildVisualPosition(8);
+    const size = clampHistoryBoardSize(record?.boardSize || record?.boardState?.board_size || record?.boardState?.board?.width || 8);
+    const position = backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || []);
     const grid = document.createElement('div');
     grid.className = 'history-board-grid';
+    grid.style.gridTemplateColumns = `repeat(${size}, minmax(0, 1fr))`;
+    grid.style.gridTemplateRows = `repeat(${size}, minmax(0, 1fr))`;
 
-    for (let row = 0; row < 8; row += 1) {
-        for (let col = 0; col < 8; col += 1) {
+    for (let row = 0; row < size; row += 1) {
+        for (let col = 0; col < size; col += 1) {
             const square = document.createElement('span');
-            const key = squareKey(row, col);
+            const key = historySquareName(row, col, size);
             square.className = `history-board-square ${(row + col) % 2 === 0 ? 'mini-light' : 'mini-dark'}`;
+            square.title = key;
+
+            appendHistoryNotation(square, row, col, size);
+
             const piece = position[key];
-            if (piece && (row < 2 || row > 5)) {
+            if (piece) {
                 const img = document.createElement('img');
                 img.src = getPieceSrc(piece);
                 img.alt = '';
@@ -990,19 +1562,35 @@ function renderHistoryAnalysisBoard(record) {
         }
     }
 
-    host.dataset.meta = `${record.boardSize}×${record.boardSize}`;
+    host.dataset.meta = `${size}×${size}`;
     host.appendChild(grid);
 }
 
-function renderHistoryMoveList(record) {
+function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this game.') {
     const list = document.getElementById('history-move-list');
     if (!list) return;
 
     list.innerHTML = '';
-    record.moves.forEach((move, index) => {
+    const moves = Array.isArray(record?.moves) ? record.moves : [];
+    if (moves.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'history-empty history-moves-empty';
+        empty.textContent = emptyMessage;
+        list.appendChild(empty);
+        return;
+    }
+
+    moves.forEach((move, index) => {
         const row = document.createElement('div');
         row.className = 'history-move-row';
-        row.innerHTML = `<span>${index + 1}</span><strong>${move}</strong>`;
+
+        const number = document.createElement('span');
+        number.textContent = String(index + 1);
+
+        const text = document.createElement('strong');
+        text.textContent = formatHistoryMove(move);
+
+        row.append(number, text);
         list.appendChild(row);
     });
 }
@@ -1010,16 +1598,179 @@ function renderHistoryMoveList(record) {
 function resultLabel(result) {
     if (result === 'win') return 'Win';
     if (result === 'loss') return 'Loss';
-    return 'Draw';
+    if (result === 'draw') return 'Draw';
+    if (result === 'active') return 'Active';
+    return 'Unknown';
 }
 
 function formatHistoryDate(timestamp) {
+    if (!timestamp) return '-';
     return new Date(timestamp).toLocaleDateString('en-US', {
         month: 'short',
         day: 'numeric',
         hour: '2-digit',
         minute: '2-digit'
     });
+}
+
+function normalizeHistoryGames(games = []) {
+    if (!Array.isArray(games)) return [];
+    return games.map(normalizeHistoryGame).filter(record => record.id);
+}
+
+function normalizeHistoryGame(game = {}) {
+    const boardState = normalizeHistoryBoardState(game.board_state);
+    const boardSize = clampHistoryBoardSize(game.board_size || boardState.board_size || boardState.board?.width || boardState.board?.height || 8);
+    const timeLimitMs = Number(game.time_limit_ms || 0);
+    const opponent = game.opponent?.username || game.opponent?.id || fallbackOpponentName(game);
+    const timestamp = game.created_at || game.updated_at || '';
+
+    return {
+        id: game.id || '',
+        mode: game.mode || modeForBoardSize(boardSize),
+        boardSize,
+        timeLimitMs,
+        timeControl: formatTimeControl(timeLimitMs),
+        isRanked: Boolean(game.is_ranked),
+        status: game.status || boardState.status || 'unknown',
+        turn: game.turn || boardState.turn || '',
+        playerColor: game.player_color || '',
+        result: normalizeHistoryResult(game.result, game.status || boardState.status, game.player_color),
+        opponent,
+        white: game.white || null,
+        black: game.black || null,
+        winnerId: game.winner_id || null,
+        timestamp,
+        boardState,
+        moves: normalizeHistoryMoves(boardState.moves)
+    };
+}
+
+function normalizeHistoryBoardState(boardState) {
+    if (!boardState) return {};
+    if (typeof boardState === 'string') {
+        try {
+            return JSON.parse(boardState);
+        } catch {
+            return {};
+        }
+    }
+    if (typeof boardState === 'object') {
+        return boardState;
+    }
+    return {};
+}
+
+function normalizeHistoryMoves(moves) {
+    if (!Array.isArray(moves)) return [];
+    return moves
+        .filter(move => move?.from && move?.to)
+        .map(move => ({
+            from: move.from,
+            to: move.to,
+            piece: move.piece || null,
+            captured: move.captured || null
+        }));
+}
+
+function normalizeHistoryResult(result, status = '', playerColor = '') {
+    if (result === 'win' || result === 'loss' || result === 'draw' || result === 'active') {
+        return result;
+    }
+
+    const normalizedStatus = String(status || '');
+    if (normalizedStatus === 'active') return 'active';
+    if (normalizedStatus.includes('draw')) return 'draw';
+
+    const whiteWon = normalizedStatus.startsWith('white_won');
+    const blackWon = normalizedStatus.startsWith('black_won');
+    if (!whiteWon && !blackWon) return 'unknown';
+
+    if (!playerColor) return 'unknown';
+    return (whiteWon && playerColor === 'white') || (blackWon && playerColor === 'black') ? 'win' : 'loss';
+}
+
+function updateHistoryRecord(detail) {
+    if (!detail?.id) return;
+    const index = historyRecords.findIndex(record => record.id === detail.id);
+    if (index >= 0) {
+        historyRecords[index] = { ...historyRecords[index], ...detail };
+    } else {
+        historyRecords.unshift(detail);
+    }
+}
+
+function fallbackOpponentName(game) {
+    if (game.player_color === 'black') return game.white?.username || game.white?.id || 'White';
+    return game.black?.username || game.black?.id || 'Black';
+}
+
+function formatTimeControl(timeLimitMs) {
+    const ms = Number(timeLimitMs || 0);
+    if (ms <= 0) return 'unknown time';
+    const minutes = ms / 60000;
+    if (Number.isInteger(minutes)) return `${minutes} min`;
+    return `${Math.round(ms / 1000)} sec`;
+}
+
+function historyFormatLabel(record) {
+    return `${modeLabel(record.mode, record.boardSize)} · ${record.timeControl}`;
+}
+
+function historyStatusLabel(record) {
+    const ranked = record.isRanked ? 'ranked' : 'casual';
+    return `${record.status || 'unknown'} · ${ranked}`;
+}
+
+function backendPiecesToHistoryPosition(pieces) {
+    if (!Array.isArray(pieces)) return {};
+    return pieces.reduce((position, piece) => {
+        const code = backendPieceToFrontendCode(piece);
+        if (code && piece.square) {
+            position[piece.square] = code;
+        }
+        return position;
+    }, {});
+}
+
+function historySquareName(row, col, size) {
+    return `${fileLabel(col)}${size - row}`;
+}
+
+function appendHistoryNotation(square, row, col, size) {
+    if (col === 0) {
+        const rank = document.createElement('span');
+        rank.className = 'history-notation history-numeric';
+        rank.textContent = String(size - row);
+        square.appendChild(rank);
+    }
+
+    if (row === size - 1) {
+        const file = document.createElement('span');
+        file.className = 'history-notation history-alpha';
+        file.textContent = fileLabel(col);
+        square.appendChild(file);
+    }
+}
+
+function clampHistoryBoardSize(size) {
+    const parsed = Number(size);
+    if (parsed === 10 || parsed === 12) return parsed;
+    return 8;
+}
+
+function formatHistoryMove(move) {
+    const color = move.piece?.color ? `${capitalize(move.piece.color)} ` : '';
+    const piece = move.piece?.type || 'piece';
+    const capture = move.captured
+        ? ` captures ${move.captured.color || ''} ${move.captured.type || 'piece'}`.replace(/\s+/g, ' ').trimEnd()
+        : '';
+    return `${color}${piece} ${move.from} -> ${move.to}${capture}`;
+}
+
+function capitalize(value) {
+    const text = String(value || '');
+    return text ? text.charAt(0).toUpperCase() + text.slice(1) : '';
 }
 
 function renderEmojiMessages() {
@@ -1055,62 +1806,74 @@ function bindAccountForm() {
     const form = document.getElementById('account-form');
     const loginForm = document.getElementById('account-login-form');
     const profileAvatarInput = document.getElementById('account-profile-avatar-input');
-    const passwordToggle = document.getElementById('account-password-toggle');
-    const editButton = document.getElementById('account-edit-btn');
+    const refreshButton = document.getElementById('account-refresh-btn');
     const logoutButton = document.getElementById('account-logout-btn');
 
-    form?.addEventListener('submit', event => {
+    form?.addEventListener('submit', async event => {
         event.preventDefault();
-        const username = document.getElementById('account-username')?.value.trim() || 'Player';
+        const username = document.getElementById('account-username')?.value.trim() || '';
         const email = document.getElementById('account-email')?.value.trim() || '';
-        const password = document.getElementById('account-password')?.value || (accountEditing ? accountProfile.password : '');
-        if (!password) {
-            showAccountMessage('Password is required.');
+        const passwordInput = document.getElementById('account-password');
+        const password = passwordInput?.value || '';
+
+        if (!username || !email || !password) {
+            showAccountMessage('Username, email and password are required.');
             return;
         }
 
-        accountProfile = {
-            username,
-            email,
-            password,
-            avatarSrc: accountEditing ? accountProfile.avatarSrc || '' : '',
-            rating: accountProfile.rating || '-',
-            registered: true,
-            signedIn: true
-        };
         try {
-            persistAccountProfile();
+            setAccountFormsBusy(true);
+            showAccountMessage('Creating account...');
+            await ChessApi.register({ username, email, password });
+
+            if (passwordInput) passwordInput.value = '';
+            const loginEmail = document.getElementById('account-login-email');
+            if (loginEmail) loginEmail.value = email;
+
+            accountEditing = false;
+            renderAccountProfile();
+            showAccountMessage('Account created. Log in with your email and password.');
         } catch (error) {
-            showAccountMessage(error.message);
-            return;
+            showAccountMessage(getAccountErrorMessage(error));
+        } finally {
+            setAccountFormsBusy(false);
         }
-        accountPasswordVisible = false;
-        accountEditing = false;
-        renderAccountProfile();
-        showAccountMessage('Account saved.');
     });
 
-    loginForm?.addEventListener('submit', event => {
+    loginForm?.addEventListener('submit', async event => {
         event.preventDefault();
-        const username = document.getElementById('account-login-username')?.value.trim() || '';
-        const password = document.getElementById('account-login-password')?.value || '';
+        const email = document.getElementById('account-login-email')?.value.trim() || '';
+        const passwordInput = document.getElementById('account-login-password');
+        const password = passwordInput?.value || '';
 
-        if (!accountProfile.registered) {
-            showAccountMessage('No local account is registered yet.');
+        if (!email || !password) {
+            showAccountMessage('Email and password are required.');
             return;
         }
 
-        if (username !== accountProfile.username || password !== accountProfile.password) {
-            showAccountMessage('Username or password is incorrect.');
-            return;
-        }
+        try {
+            setAccountFormsBusy(true);
+            showAccountMessage('Logging in...');
+            await ChessApi.login({ email, password });
+            const profile = await ChessApi.me();
 
-        accountProfile.signedIn = true;
-        persistAccountProfile();
-        accountPasswordVisible = false;
-        accountEditing = false;
-        renderAccountProfile();
-        showAccountMessage('Logged in.');
+            if (passwordInput) passwordInput.value = '';
+            applyBackendAccountProfile(profile);
+            resetHistoryState();
+            accountEditing = false;
+            renderAccountProfile();
+            showAccountMessage('Logged in.');
+        } catch (error) {
+            if (error?.status === 401) {
+                ChessApi.clearToken();
+                resetHistoryState();
+                accountProfile = createEmptyAccountProfile();
+                renderAccountProfile();
+            }
+            showAccountMessage(getAccountErrorMessage(error));
+        } finally {
+            setAccountFormsBusy(false);
+        }
     });
 
     profileAvatarInput?.addEventListener('change', async event => {
@@ -1119,9 +1882,8 @@ function bindAccountForm() {
 
         try {
             accountProfile.avatarSrc = await readAccountAvatarAsDataUrl(file);
-            persistAccountProfile();
             renderAccountProfile();
-            showAccountMessage('Profile image saved locally.');
+            showAccountMessage('Profile image applied for this browser session.');
         } catch (error) {
             showAccountMessage(error.message);
         } finally {
@@ -1129,21 +1891,30 @@ function bindAccountForm() {
         }
     });
 
-    passwordToggle?.addEventListener('click', () => {
-        accountPasswordVisible = !accountPasswordVisible;
-        renderAccountProfile();
-    });
-
-    editButton?.addEventListener('click', () => {
-        accountEditing = true;
-        renderAccountProfile();
-        showAccountMessage('');
+    refreshButton?.addEventListener('click', async () => {
+        await refreshAccountFromBackend({ showMessages: true });
     });
 
     logoutButton?.addEventListener('click', () => {
-        accountProfile.signedIn = false;
-        persistAccountProfile();
-        accountPasswordVisible = false;
+        if (queuedForMatch) {
+            window.ChessSocket?.cancelQueue?.();
+        }
+        window.ChessSocket?.close?.();
+        ChessApi.logout();
+        clearLegacyAccountProfile();
+        resetHistoryState();
+        accountProfile = createEmptyAccountProfile();
+        activeMatchRequest = null;
+        queuedForMatch = false;
+        activeRemoteGame = false;
+        currentGameState = null;
+        currentPlayerColor = null;
+        currentGameId = null;
+        currentValidMoves = {};
+        pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
+        clearClassicMoveHighlights();
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -1151,30 +1922,17 @@ function bindAccountForm() {
 }
 
 function loadAccountProfile() {
-    try {
-        const parsed = JSON.parse(localStorage.getItem(ACCOUNT_PROFILE_KEY));
-        const username = parsed?.username || '';
-        const password = parsed?.password || '';
-        const registered = Boolean(parsed?.registered || (username && password));
-        return {
-            username,
-            email: parsed?.email || '',
-            password,
-            avatarSrc: parsed?.avatarSrc || '',
-            rating: parsed?.rating || '-',
-            registered,
-            signedIn: registered ? parsed?.signedIn ?? true : false
-        };
-    } catch {
-        return createEmptyAccountProfile();
-    }
+    const profile = createEmptyAccountProfile();
+    const hasToken = Boolean(window.ChessApi?.hasToken?.());
+    profile.registered = hasToken;
+    profile.signedIn = hasToken;
+    return profile;
 }
 
 function renderAccountProfile() {
     const username = document.getElementById('account-username');
     const email = document.getElementById('account-email');
     const password = document.getElementById('account-password');
-    const loginUsername = document.getElementById('account-login-username');
     const loginPassword = document.getElementById('account-login-password');
     const chip = document.getElementById('account-chip');
     const authPanel = document.getElementById('account-auth-panel');
@@ -1183,46 +1941,42 @@ function renderAccountProfile() {
     const accountSubmitButton = document.getElementById('account-submit-btn');
     const profilePanel = document.getElementById('account-profile-panel');
     const profileName = document.getElementById('account-profile-name');
-    const profilePassword = document.getElementById('account-profile-password');
+    const profileEmail = document.getElementById('account-profile-email');
     const profileRating = document.getElementById('account-profile-rating');
 
-    const shouldShowProfile = accountProfile.registered && accountProfile.signedIn && !accountEditing;
-    const shouldShowLogin = accountProfile.registered && !accountProfile.signedIn && !accountEditing;
-    const isEditing = accountProfile.registered && accountEditing;
+    const shouldShowProfile = accountProfile.signedIn;
 
-    if (username) username.value = isEditing ? accountProfile.username || '' : '';
-    if (email) email.value = isEditing ? accountProfile.email || '' : '';
-    if (password) password.value = isEditing ? accountProfile.password || '' : '';
-    if (loginUsername) loginUsername.value = shouldShowLogin ? accountProfile.username || '' : '';
-    if (loginPassword) loginPassword.value = '';
-    if (accountFormTitle) accountFormTitle.textContent = isEditing ? 'Edit Account' : 'Register';
-    if (accountSubmitButton) accountSubmitButton.textContent = isEditing ? 'Save Profile' : 'Register';
+    if (shouldShowProfile) {
+        if (username) username.value = '';
+        if (email) email.value = '';
+        if (password) password.value = '';
+        if (loginPassword) loginPassword.value = '';
+    }
+    if (accountFormTitle) accountFormTitle.textContent = 'Register';
+    if (accountSubmitButton) accountSubmitButton.textContent = 'Register';
     if (chip) {
-        const label = accountProfile.signedIn ? `Account: ${accountProfile.username}` : 'Account';
+        const displayName = accountProfile.username || 'Profile';
+        const label = accountProfile.signedIn ? `Account: ${displayName}` : 'Account';
         chip.title = label;
         chip.setAttribute('aria-label', label);
     }
 
     authPanel?.classList.toggle('hidden', shouldShowProfile);
-    loginForm?.classList.toggle('hidden', !shouldShowLogin);
+    loginForm?.classList.toggle('hidden', shouldShowProfile);
     profilePanel?.classList.toggle('hidden', !shouldShowProfile);
 
     renderAccountAvatar('account-profile-avatar', 'account-profile-avatar-fallback', accountProfile.avatarSrc, accountInitial());
 
     if (profileName) profileName.textContent = accountProfile.username || 'Player';
-    if (profilePassword) {
-        profilePassword.textContent = accountPasswordVisible
-            ? accountProfile.password || '-'
-            : maskPassword(accountProfile.password);
-    }
+    if (profileEmail) profileEmail.textContent = accountProfile.email || '-';
     if (profileRating) profileRating.textContent = accountProfile.rating || '-';
 }
 
 function createEmptyAccountProfile() {
     return {
+        id: '',
         username: '',
         email: '',
-        password: '',
         avatarSrc: '',
         rating: '-',
         registered: false,
@@ -1230,12 +1984,73 @@ function createEmptyAccountProfile() {
     };
 }
 
-function persistAccountProfile() {
-    try {
-        localStorage.setItem(ACCOUNT_PROFILE_KEY, JSON.stringify(accountProfile));
-    } catch {
-        throw new Error('Browser storage is full. Use a smaller profile image.');
+function applyBackendAccountProfile(profile) {
+    accountProfile = {
+        id: profile?.id || '',
+        username: profile?.username || '',
+        email: profile?.email || '',
+        avatarSrc: accountProfile.avatarSrc || '',
+        rating: profile?.rating ?? '-',
+        registered: true,
+        signedIn: true
+    };
+}
+
+async function refreshAccountFromBackend({ showMessages = false } = {}) {
+    if (!window.ChessApi?.hasToken?.()) {
+        resetHistoryState();
+        accountProfile = createEmptyAccountProfile();
+        renderAccountProfile();
+        return false;
     }
+
+    try {
+        if (showMessages) {
+            showAccountMessage('Refreshing profile...');
+        }
+
+        const profile = await ChessApi.me();
+        applyBackendAccountProfile(profile);
+        renderAccountProfile();
+
+        if (showMessages) {
+            showAccountMessage('Profile refreshed.');
+        }
+        return true;
+    } catch (error) {
+        if (error?.status === 401) {
+            ChessApi.clearToken();
+            resetHistoryState();
+            accountProfile = createEmptyAccountProfile();
+            renderAccountProfile();
+            showAccountMessage(showMessages ? 'Session expired. Log in again.' : '');
+            return false;
+        }
+
+        if (showMessages || document.getElementById('page-account')?.classList.contains('active')) {
+            showAccountMessage(getAccountErrorMessage(error));
+        }
+        return false;
+    }
+}
+
+function setAccountFormsBusy(isBusy) {
+    document.querySelectorAll('#account-auth-panel input, #account-auth-panel button, #account-profile-panel button')
+        .forEach(element => {
+            element.disabled = isBusy;
+        });
+}
+
+function clearLegacyAccountProfile() {
+    try {
+        localStorage.removeItem(LEGACY_ACCOUNT_PROFILE_KEY);
+    } catch {
+        // Ignore storage errors; this is only a cleanup for the old local auth profile.
+    }
+}
+
+function getAccountErrorMessage(error) {
+    return window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unexpected account error.';
 }
 
 function renderAccountAvatar(imageId, fallbackId, src, fallbackText) {
@@ -1261,11 +2076,6 @@ function accountInitial() {
     return (accountProfile.username || '?').trim().charAt(0).toUpperCase() || '?';
 }
 
-function maskPassword(password) {
-    if (!password) return '-';
-    return '*'.repeat(Math.max(8, password.length));
-}
-
 function showAccountMessage(message) {
     const messageEl = document.getElementById('account-message');
     if (messageEl) {
@@ -1277,12 +2087,182 @@ function pieceTheme(piece) {
     return getPieceSrc(piece);
 }
 
-function handleClassicDrop(source, target, piece, newPosition, oldPosition) {
-    if (!target || target === 'offboard' || source === target) return undefined;
-    trackCapture(piece, oldPosition?.[target]);
-    handleLocalMoveComplete();
-    renderCapturedPieces();
-    return undefined;
+function handleClassicDragStart(source, piece) {
+    clearClassicMoveHighlights();
+
+    if (!isClassicBackendGameReady()) {
+        setMatchmakingStatus('Waiting for game state from backend.');
+        return false;
+    }
+
+    if (pendingClassicMove) {
+        setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (classicSnapbackInProgress || queuedClassicPositionUpdate) {
+        setMatchmakingStatus('Applying confirmed move.');
+        return false;
+    }
+
+    if (currentGameState.status !== 'active') {
+        setMatchmakingStatus(currentGameState.status || 'Game is not active.');
+        return false;
+    }
+
+    if (!isCurrentPlayerTurn()) {
+        setMatchmakingStatus('Opponent turn.');
+        return false;
+    }
+
+    if (!isClassicPieceOwnedByPlayer(piece)) {
+        setMatchmakingStatus('You can move only your pieces.');
+        return false;
+    }
+
+    if (validTargetsForSquare(source).length === 0) {
+        setMatchmakingStatus('This piece has no legal moves.');
+        return false;
+    }
+
+    showClassicMoveHighlights(source, piece);
+    return true;
+}
+
+function handleClassicDrop(source, target, piece) {
+    clearClassicMoveHighlights();
+
+    if (!target || target === 'offboard' || source === target) return 'snapback';
+
+    if (!canSubmitClassicMove(source, target, piece)) {
+        return 'snapback';
+    }
+
+    pendingClassicMove = { from: source, to: target };
+    setMatchmakingStatus(`Sending move ${source}-${target}...`);
+
+    try {
+        if (window.ChessSocket?.move) {
+            ChessSocket.move({ from: source, to: target });
+        } else {
+            ChessSocket.send('MOVE', { from: source, to: target });
+        }
+        classicSnapbackInProgress = true;
+    } catch (error) {
+        pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
+        setMatchmakingStatus(error.message || 'Unable to send move.');
+    }
+
+    return 'snapback';
+}
+
+function handleClassicSnapbackEnd() {
+    classicSnapbackInProgress = false;
+    clearClassicMoveHighlights();
+    flushQueuedClassicPositionUpdate();
+}
+
+function canSubmitClassicMove(source, target, piece) {
+    if (!isClassicBackendGameReady()) {
+        setMatchmakingStatus('Waiting for game state from backend.');
+        return false;
+    }
+
+    if (pendingClassicMove) {
+        setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (classicSnapbackInProgress || queuedClassicPositionUpdate) {
+        setMatchmakingStatus('Applying confirmed move.');
+        return false;
+    }
+
+    if (!window.ChessSocket?.isOpen?.()) {
+        setMatchmakingStatus('WebSocket is not connected.');
+        return false;
+    }
+
+    if (currentGameState.status !== 'active') {
+        setMatchmakingStatus(currentGameState.status || 'Game is not active.');
+        return false;
+    }
+
+    if (!isCurrentPlayerTurn()) {
+        setMatchmakingStatus('Opponent turn.');
+        return false;
+    }
+
+    if (!isClassicPieceOwnedByPlayer(piece)) {
+        setMatchmakingStatus('You can move only your pieces.');
+        return false;
+    }
+
+    if (!validTargetsForSquare(source).includes(target)) {
+        setMatchmakingStatus('Illegal move.');
+        return false;
+    }
+
+    return true;
+}
+
+function isClassicBackendGameReady() {
+    return activeRemoteGame
+        && currentGameState
+        && currentPlayerColor
+        && boardSizeFromGameState(currentGameState) === 8;
+}
+
+function isCurrentPlayerTurn() {
+    return currentGameState?.turn === currentPlayerColor;
+}
+
+function isClassicPieceOwnedByPlayer(piece) {
+    if (!piece || !currentPlayerColor) return false;
+    return piece[0] === frontendColorCode(currentPlayerColor);
+}
+
+function frontendColorCode(color) {
+    return color === 'white' ? 'w' : 'b';
+}
+
+function validTargetsForSquare(square) {
+    return Array.isArray(currentValidMoves?.[square]) ? currentValidMoves[square] : [];
+}
+
+function showClassicMoveHighlights(source, piece) {
+    const sourceSquare = classicSquareElement(source);
+    sourceSquare?.classList.add('classic-move-source');
+
+    validTargetsForSquare(source).forEach(target => {
+        const targetSquare = classicSquareElement(target);
+        if (!targetSquare) return;
+
+        const targetClass = isClassicCaptureTarget(piece, target)
+            ? 'classic-capture-target'
+            : 'classic-move-target';
+        targetSquare.classList.add(targetClass);
+    });
+}
+
+function clearClassicMoveHighlights() {
+    document
+        .querySelectorAll('#myBoard .classic-move-source, #myBoard .classic-move-target, #myBoard .classic-capture-target')
+        .forEach(square => {
+            square.classList.remove('classic-move-source', 'classic-move-target', 'classic-capture-target');
+        });
+}
+
+function classicSquareElement(square) {
+    if (!square) return null;
+    return document.querySelector(`#myBoard .square-${square}`);
+}
+
+function isClassicCaptureTarget(piece, target) {
+    const targetPiece = board?.position?.()?.[target];
+    return Boolean(piece && targetPiece && targetPiece[0] !== piece[0]);
 }
 
 function trackCapture(movingPiece, capturedPiece) {

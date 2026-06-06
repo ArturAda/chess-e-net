@@ -25,12 +25,30 @@ func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
 func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 	return nil
 }
-
-type DummyQueueManager struct{}
-
-func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ bool, _ time.Duration) {
+func (d *DummyUserRepository) GetOrCreateRating(_ uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
+	return &users.UserRating{Rating: users.DefaultRating}, nil
 }
-func (d *DummyQueueManager) RemovePlayer(_ *Client) {}
+func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
+	return 1216, 1184, nil
+}
+
+type DummyQueueManager struct {
+	AddErr  error
+	Added   chan struct{}
+	Removed chan struct{}
+}
+
+func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ int, _ bool, _ time.Duration) error {
+	if d.Added != nil {
+		d.Added <- struct{}{}
+	}
+	return d.AddErr
+}
+func (d *DummyQueueManager) RemovePlayer(_ *Client) {
+	if d.Removed != nil {
+		d.Removed <- struct{}{}
+	}
+}
 
 func TestServeWS_NoToken(t *testing.T) {
 	gin.SetMode(gin.TestMode)

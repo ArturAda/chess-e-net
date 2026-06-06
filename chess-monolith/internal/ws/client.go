@@ -19,7 +19,8 @@ const (
 
 // QueueManager абстрагирует логику матчмейкинга от сокетов
 type QueueManager interface {
-	AddPlayer(c *Client, mode string, isRanked bool, timeLimit time.Duration)
+	AddPlayer(c *Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) error
+	RemovePlayer(c *Client)
 }
 
 // Client - это посредник между websocket-соединением и нашим Hub
@@ -28,6 +29,7 @@ type Client struct {
 	Conn         *websocket.Conn
 	Send         chan []byte
 	UserID       string
+	Username     string
 	Rating       int
 	QueueManager QueueManager
 
@@ -36,26 +38,28 @@ type Client struct {
 	Opponent   *Client
 }
 
-// parsePos превращает шахматную координату "e2" в core.Pos (X: 4, Y: 1)
-func parsePos(s string) core.Pos {
-	if len(s) != 2 {
-		return core.Pos{X: -1, Y: -1}
-	}
-	return core.Pos{
-		X: int(s[0] - 'a'),
-		Y: int(s[1] - '1'),
-	}
-}
-
 // Message - универсальная структура для обмена JSON
 type Message struct {
 	Type    string          `json:"type"`              // "MOVE", "JOIN_QUEUE", "RESIGN"
 	Payload json.RawMessage `json:"payload,omitempty"` // Динамические данные
 }
 
+func (c *Client) SendGameState() {
+	if c == nil || c.ActiveGame == nil {
+		return
+	}
+
+	stateDTO := c.ActiveGame.ExportStateForPlayer(c.Color)
+	c.SendMessage(MessageTypeGameState, stateDTO)
+}
+
 // ReadPump читает сообщения из сокета (от браузера к серверу)
 func (c *Client) ReadPump() {
 	defer func() {
+		if c.QueueManager != nil {
+			c.QueueManager.RemovePlayer(c)
+		}
+
 		if c.ActiveGame != nil {
 			c.ActiveGame.Mu.Lock()
 			status := c.ActiveGame.Status
@@ -106,13 +110,24 @@ func (c *Client) ReadPump() {
 
 		var wsMsg Message
 		if err := json.Unmarshal(message, &wsMsg); err != nil {
+			c.SendError(ErrorCodeInvalidMessage, "Invalid websocket message", true)
 			continue
 		}
 
 		switch wsMsg.Type {
 		case "MOVE":
+			var moveReq struct {
+				From string `json:"from"`
+				To   string `json:"to"`
+			}
+
+			if err := json.Unmarshal(wsMsg.Payload, &moveReq); err != nil {
+				c.SendError(ErrorCodeInvalidMessage, "Invalid move payload", true)
+				continue
+			}
+
 			if c.ActiveGame == nil {
-				c.sendError("You are not in a game")
+				c.SendMoveRejected(moveReq.From, moveReq.To, ErrorCodeNotInGame, "You are not in a game", true)
 				continue
 			}
 
@@ -121,23 +136,31 @@ func (c *Client) ReadPump() {
 			c.ActiveGame.Mu.Unlock()
 
 			if c.Color != currentTurn {
-				c.sendError("Not your turn")
+				c.SendMoveRejected(moveReq.From, moveReq.To, ErrorCodeNotYourTurn, "Not your turn", true)
 				continue
 			}
 
-			var moveReq struct {
-				From string `json:"from"`
-				To   string `json:"to"`
-			}
-
-			if err := json.Unmarshal(wsMsg.Payload, &moveReq); err != nil {
-				c.sendError("Invalid move payload")
-				continue
-			}
-
-			err := c.ActiveGame.MakeMove(parsePos(moveReq.From), parsePos(moveReq.To))
+			from, err := core.ParseSquare(moveReq.From)
 			if err != nil {
-				c.sendError(err.Error())
+				c.SendMoveRejected(moveReq.From, moveReq.To, ErrorCodeInvalidMove, "Invalid from square", true)
+				continue
+			}
+
+			to, err := core.ParseSquare(moveReq.To)
+			if err != nil {
+				c.SendMoveRejected(moveReq.From, moveReq.To, ErrorCodeInvalidMove, "Invalid to square", true)
+				continue
+			}
+
+			err = c.ActiveGame.MakeMove(from, to)
+			if err != nil {
+				code := ErrorCodeInvalidMove
+				recoverable := true
+				if err.Error() == "game is over" {
+					code = ErrorCodeGameAlreadyOver
+					recoverable = false
+				}
+				c.SendMoveRejected(moveReq.From, moveReq.To, code, err.Error(), recoverable)
 				continue
 			}
 
@@ -148,16 +171,9 @@ func (c *Client) ReadPump() {
 			if status != "active" {
 				c.ActiveGame.EndGame(status)
 			} else {
-				stateDTO := c.ActiveGame.ExportState()
-				stateBytes, _ := json.Marshal(stateDTO)
-				broadcastMsg, _ := json.Marshal(Message{
-					Type:    "GAME_STATE",
-					Payload: stateBytes,
-				})
-
-				c.Send <- broadcastMsg
+				c.SendGameState()
 				if c.Opponent != nil {
-					c.Opponent.Send <- broadcastMsg
+					c.Opponent.SendGameState()
 				}
 			}
 
@@ -165,12 +181,13 @@ func (c *Client) ReadPump() {
 			// Ожидаем JSON: {"mode": "classic", "is_ranked": true, "time_limit": 10}
 			var joinReq struct {
 				Mode      string `json:"mode"`
+				BoardSize int    `json:"board_size"`
 				IsRanked  bool   `json:"is_ranked"`
 				TimeLimit int    `json:"time_limit"` // Время в минутах
 			}
 
 			if err := json.Unmarshal(wsMsg.Payload, &joinReq); err != nil {
-				c.sendError("Invalid join payload")
+				c.SendError(ErrorCodeInvalidMessage, "Invalid join payload", true)
 				continue
 			}
 
@@ -181,7 +198,36 @@ func (c *Client) ReadPump() {
 				joinReq.Mode = "classic"
 			}
 
-			c.QueueManager.AddPlayer(c, joinReq.Mode, joinReq.IsRanked, time.Duration(joinReq.TimeLimit)*time.Minute)
+			if c.QueueManager == nil {
+				c.SendError(ErrorCodeQueueFailed, "Queue manager is not available", true)
+				continue
+			}
+
+			boardSize := joinReq.BoardSize
+			if boardSize == 0 {
+				boardSize = BoardSizeForMode(joinReq.Mode)
+			}
+			expectedBoardSize := BoardSizeForMode(joinReq.Mode)
+			if expectedBoardSize != 0 && boardSize != expectedBoardSize {
+				c.SendError(ErrorCodeInvalidMessage, "board_size does not match mode", true)
+				continue
+			}
+
+			timeLimit := time.Duration(joinReq.TimeLimit) * time.Minute
+			if err := c.QueueManager.AddPlayer(c, joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit); err != nil {
+				c.SendProtocolError(err, ErrorCodeQueueFailed)
+				continue
+			}
+
+			c.SendQueueJoined(joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit)
+
+		case "CANCEL_QUEUE":
+			if c.QueueManager == nil {
+				c.SendError(ErrorCodeQueueFailed, "Queue manager is not available", true)
+				continue
+			}
+
+			c.QueueManager.RemovePlayer(c)
 
 		case "RESIGN":
 			if c.ActiveGame != nil {
@@ -207,10 +253,7 @@ func (c *Client) ReadPump() {
 
 				if status == "active" {
 					// Пересылаем предложение оппоненту
-					offerMsg, _ := json.Marshal(Message{
-						Type: "DRAW_OFFER",
-					})
-					c.Opponent.Send <- offerMsg
+					c.Opponent.SendMessage(MessageTypeDrawOffer, nil)
 					log.Printf("Player %s offered a draw.", c.UserID)
 				}
 			}
@@ -232,26 +275,15 @@ func (c *Client) ReadPump() {
 		case "DRAW_DECLINE":
 			if c.ActiveGame != nil && c.Opponent != nil {
 				// Уведомляем первого игрока, что ничья отклонена
-				declineMsg, _ := json.Marshal(Message{
-					Type: "DRAW_DECLINE",
-				})
-				c.Opponent.Send <- declineMsg
+				c.Opponent.SendMessage(MessageTypeDrawDecline, nil)
 				log.Printf("Player %s declined the draw.", c.UserID)
 			}
 
 		default:
 			log.Printf("Unknown message type: %s", wsMsg.Type)
+			c.SendError(ErrorCodeUnknownMessage, "Unknown message type: "+wsMsg.Type, true)
 		}
 	}
-}
-
-func (c *Client) sendError(errMsg string) {
-	errPayload, _ := json.Marshal(map[string]string{"message": errMsg})
-	msg, _ := json.Marshal(Message{
-		Type:    "ERROR",
-		Payload: errPayload,
-	})
-	c.Send <- msg
 }
 
 // WritePump пишет сообщения в сокет (от сервера к браузеру)

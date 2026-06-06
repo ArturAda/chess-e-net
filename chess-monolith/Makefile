@@ -2,13 +2,19 @@
 
 DB_URL=postgres://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):$(POSTGRES_PORT)/$(POSTGRES_DB)?sslmode=disable
 
-.PHONY: run up down echo-db migrate-create migrate-up migrate-down
+.PHONY: run build-frontend docker-build up down echo-db migrate-create migrate-up migrate-down
 
 run:
 	go run cmd/server/main.go
 
+build-frontend:
+	cd frontend && npm run build
+
+docker-build:
+	docker compose --env-file configs/.env build backend
+
 up:
-	docker compose --env-file configs/.env up -d
+	docker compose --env-file configs/.env up --build -d
 
 down:
 	docker compose --env-file configs/.env down
