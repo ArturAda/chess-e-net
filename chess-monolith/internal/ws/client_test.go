@@ -313,7 +313,7 @@ func TestClient_ReadPump_JoinQueue(t *testing.T) {
 
 	wsMsg := Message{
 		Type:    "JOIN_QUEUE",
-		Payload: json.RawMessage(`{"mode": "classic", "is_ranked": true, "time_limit": 10}`),
+		Payload: json.RawMessage(`{"mode": "classic", "is_ranked": true, "time_limit": 10, "visual_state": {"light_square": {"id": "classic-green"}, "pieces": {"white": "pixel"}}}`),
 	}
 
 	err = conn.WriteJSON(wsMsg)
@@ -334,6 +334,8 @@ func TestClient_ReadPump_JoinQueue(t *testing.T) {
 	assert.Equal(t, 8, payload.BoardSize)
 	assert.True(t, payload.IsRanked)
 	assert.Equal(t, 10, payload.TimeLimitMinutes)
+	require.NotNil(t, qm.LastClient)
+	assert.JSONEq(t, `{"light_square":{"id":"classic-green"},"pieces":{"white":"pixel"}}`, qm.LastClient.VisualState)
 
 	assert.Equal(t, 1, hub.Len(), "Client should still be connected after valid JOIN_QUEUE")
 }

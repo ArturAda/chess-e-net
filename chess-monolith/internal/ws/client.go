@@ -14,7 +14,7 @@ const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
 	pingPeriod     = networkHeartbeatPing
-	maxMessageSize = 1024 // 1 KB для шахматных ходов более чем достаточно
+	maxMessageSize = 16 * 1024 // JOIN_QUEUE can include a compact visual snapshot.
 )
 
 // QueueManager абстрагирует логику матчмейкинга от сокетов
@@ -32,6 +32,7 @@ type Client struct {
 	Username     string
 	Rating       int
 	QueueManager QueueManager
+	VisualState  string
 
 	ActiveGame *session.GameSession
 	Color      core.Color
@@ -179,10 +180,11 @@ func (c *Client) ReadPump() {
 		case "JOIN_QUEUE":
 			// Ожидаем JSON: {"mode": "classic", "is_ranked": true, "time_limit": 10}
 			var joinReq struct {
-				Mode      string `json:"mode"`
-				BoardSize int    `json:"board_size"`
-				IsRanked  bool   `json:"is_ranked"`
-				TimeLimit int    `json:"time_limit"` // Время в минутах
+				Mode        string          `json:"mode"`
+				BoardSize   int             `json:"board_size"`
+				IsRanked    bool            `json:"is_ranked"`
+				TimeLimit   int             `json:"time_limit"` // Время в минутах
+				VisualState json.RawMessage `json:"visual_state"`
 			}
 
 			if err := json.Unmarshal(wsMsg.Payload, &joinReq); err != nil {
@@ -213,6 +215,7 @@ func (c *Client) ReadPump() {
 			}
 
 			timeLimit := time.Duration(joinReq.TimeLimit) * time.Minute
+			c.VisualState = NormalizeVisualState(joinReq.VisualState)
 			if err := c.QueueManager.AddPlayer(c, joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit); err != nil {
 				c.SendProtocolError(err, ErrorCodeQueueFailed)
 				continue

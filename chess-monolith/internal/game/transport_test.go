@@ -54,18 +54,22 @@ func setupGameTransportRouter(t *testing.T) (*gin.Engine, users.User, users.User
 	require.NoError(t, db.Create(&otherUser).Error)
 
 	boardState := `{"game_id":"game-1","board_size":8,"moves":[{"from":"e2","to":"e4","piece":{"type":"pawn","color":"white"}}]}`
+	whiteVisualState := `{"light_square":{"id":"classic-green"},"pieces":{"white":"pixel"}}`
+	blackVisualState := `{"light_square":{"id":"red"},"pieces":{"black":"neo"}}`
 	gameForUser := Game{
-		ID:          uuid.New(),
-		WhiteID:     currentUser.ID,
-		BlackID:     opponent.ID,
-		Mode:        "classic",
-		BoardSize:   8,
-		TimeLimitMs: 600000,
-		IsRanked:    true,
-		Status:      "white_won",
-		Turn:        "black",
-		BoardState:  boardState,
-		CreatedAt:   time.Now().Add(-time.Hour),
+		ID:               uuid.New(),
+		WhiteID:          currentUser.ID,
+		BlackID:          opponent.ID,
+		Mode:             "classic",
+		BoardSize:        8,
+		TimeLimitMs:      600000,
+		IsRanked:         true,
+		Status:           "white_won",
+		Turn:             "black",
+		BoardState:       boardState,
+		WhiteVisualState: whiteVisualState,
+		BlackVisualState: blackVisualState,
+		CreatedAt:        time.Now().Add(-time.Hour),
 	}
 	otherGame := Game{
 		ID:          uuid.New(),
@@ -123,6 +127,16 @@ func TestHandler_ListGames(t *testing.T) {
 	assert.Equal(t, opponent.ID.String(), game.Opponent.ID)
 	assert.Equal(t, "opponent", game.Opponent.Username)
 	assert.Equal(t, 1190, game.Opponent.Rating)
+	assert.True(t, json.Valid(game.BoardState))
+	assert.True(t, json.Valid(game.VisualState))
+
+	var boardState map[string]any
+	require.NoError(t, json.Unmarshal(game.BoardState, &boardState))
+	assert.Equal(t, float64(8), boardState["board_size"])
+
+	var visualState map[string]any
+	require.NoError(t, json.Unmarshal(game.VisualState, &visualState))
+	assert.Contains(t, visualState, "light_square")
 }
 
 func TestHandler_GetGame(t *testing.T) {
@@ -143,11 +157,16 @@ func TestHandler_GetGame(t *testing.T) {
 	assert.Equal(t, gameForUser.ID.String(), response.ID)
 	assert.Equal(t, "white_won", response.Status)
 	assert.True(t, json.Valid(response.BoardState))
+	assert.True(t, json.Valid(response.VisualState))
 
 	var boardState map[string]any
 	require.NoError(t, json.Unmarshal(response.BoardState, &boardState))
 	assert.Equal(t, float64(8), boardState["board_size"])
 	assert.Len(t, boardState["moves"], 1)
+
+	var visualState map[string]any
+	require.NoError(t, json.Unmarshal(response.VisualState, &visualState))
+	assert.Contains(t, visualState, "pieces")
 }
 
 func TestHandler_GamesRequireAuthorization(t *testing.T) {
@@ -205,4 +224,29 @@ func TestHandler_GetGame_NotFoundForNonParticipant(t *testing.T) {
 	isolatedRouter.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
+}
+
+func TestHandler_GetGame_ReturnsVisualStateForCurrentParticipant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router, _, opponent, gameForUser, _ := setupGameTransportRouter(t)
+
+	opponentToken, err := jwtutil.GenerateToken(opponent.ID.String(), testJWTSecret)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/games/"+gameForUser.ID.String(), nil)
+	req.Header.Set("Authorization", "Bearer "+opponentToken)
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var response GameDetailDTO
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+	var visualState map[string]any
+	require.NoError(t, json.Unmarshal(response.VisualState, &visualState))
+	lightSquare, ok := visualState["light_square"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "red", lightSquare["id"])
 }

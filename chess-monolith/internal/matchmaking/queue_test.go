@@ -15,9 +15,14 @@ import (
 )
 
 // DummyRepo заглушки для тестов
-type DummyGameRepo struct{}
+type DummyGameRepo struct {
+	Created []*game.Game
+}
 
-func (d *DummyGameRepo) CreateGame(g *game.Game) error                             { return nil }
+func (d *DummyGameRepo) CreateGame(g *game.Game) error {
+	d.Created = append(d.Created, g)
+	return nil
+}
 func (d *DummyGameRepo) GetGame(id uuid.UUID) (*game.Game, error)                  { return nil, nil }
 func (d *DummyGameRepo) GetGameForUser(id, userID uuid.UUID) (*game.Game, error)   { return nil, nil }
 func (d *DummyGameRepo) ListGamesForUser(userID uuid.UUID) ([]game.Game, error)    { return nil, nil }
@@ -158,6 +163,30 @@ func TestMatchmaker_CasualMatch(t *testing.T) {
 	key := QueueKey{Mode: "classic", BoardSize: 8, TimeLimit: 10 * time.Minute}
 	assert.Equal(t, 0, len(mm.casualQueues[key]))
 	mm.mu.Unlock()
+}
+
+func TestMatchmaker_StartGamePersistsPlayerVisualStates(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("classic", &DummyMode{})
+	repo := &DummyGameRepo{}
+	mm := NewMatchmaker(reg, repo, &DummyUserRepo{})
+
+	c1 := &ws.Client{
+		UserID:      uuid.New().String(),
+		Send:        make(chan []byte, 10),
+		VisualState: `{"light_square":{"id":"classic-green"},"pieces":{"white":"pixel"}}`,
+	}
+	c2 := &ws.Client{
+		UserID:      uuid.New().String(),
+		Send:        make(chan []byte, 10),
+		VisualState: `{"light_square":{"id":"red"},"pieces":{"black":"neo"}}`,
+	}
+
+	mm.startGame(c1, c2, "classic", 8, false, 10*time.Minute)
+
+	require.Len(t, repo.Created, 1)
+	assert.JSONEq(t, c1.VisualState, repo.Created[0].WhiteVisualState)
+	assert.JSONEq(t, c2.VisualState, repo.Created[0].BlackVisualState)
 }
 
 func TestMatchmaker_RankedMatch_Success(t *testing.T) {

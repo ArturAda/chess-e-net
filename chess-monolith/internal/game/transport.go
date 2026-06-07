@@ -26,26 +26,27 @@ type PlayerDTO struct {
 }
 
 type GameSummaryDTO struct {
-	ID          string    `json:"id"`
-	Mode        string    `json:"mode"`
-	BoardSize   int       `json:"board_size"`
-	TimeLimitMs int64     `json:"time_limit_ms"`
-	IsRanked    bool      `json:"is_ranked"`
-	Status      string    `json:"status"`
-	Turn        string    `json:"turn"`
-	PlayerColor string    `json:"player_color"`
-	Result      string    `json:"result"`
-	White       PlayerDTO `json:"white"`
-	Black       PlayerDTO `json:"black"`
-	Opponent    PlayerDTO `json:"opponent"`
-	WinnerID    *string   `json:"winner_id,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID          string          `json:"id"`
+	Mode        string          `json:"mode"`
+	BoardSize   int             `json:"board_size"`
+	TimeLimitMs int64           `json:"time_limit_ms"`
+	IsRanked    bool            `json:"is_ranked"`
+	Status      string          `json:"status"`
+	Turn        string          `json:"turn"`
+	PlayerColor string          `json:"player_color"`
+	Result      string          `json:"result"`
+	White       PlayerDTO       `json:"white"`
+	Black       PlayerDTO       `json:"black"`
+	Opponent    PlayerDTO       `json:"opponent"`
+	WinnerID    *string         `json:"winner_id,omitempty"`
+	BoardState  json.RawMessage `json:"board_state"`
+	VisualState json.RawMessage `json:"visual_state"`
+	CreatedAt   time.Time       `json:"created_at"`
+	UpdatedAt   time.Time       `json:"updated_at"`
 }
 
 type GameDetailDTO struct {
 	GameSummaryDTO
-	BoardState json.RawMessage `json:"board_state"`
 }
 
 func NewHandler(repo Repository, userRepo users.Repository, jwtSecret string) *Handler {
@@ -143,7 +144,6 @@ func (h *Handler) authorize(c *gin.Context) (uuid.UUID, bool) {
 func (h *Handler) buildDetailDTO(item Game, currentUserID uuid.UUID) GameDetailDTO {
 	return GameDetailDTO{
 		GameSummaryDTO: h.buildSummaryDTO(item, currentUserID),
-		BoardState:     normalizedBoardState(item.BoardState),
 	}
 }
 
@@ -169,6 +169,8 @@ func (h *Handler) buildSummaryDTO(item Game, currentUserID uuid.UUID) GameSummar
 		Black:       black,
 		Opponent:    opponent,
 		WinnerID:    winnerIDString(item.WinnerID),
+		BoardState:  normalizedJSONState(item.BoardState),
+		VisualState: visualStateForUser(item, currentUserID),
 		CreatedAt:   item.CreatedAt,
 		UpdatedAt:   item.UpdatedAt,
 	}
@@ -193,12 +195,22 @@ func bearerTokenFromHeader(header string) (string, bool) {
 	return parts[1], true
 }
 
-func normalizedBoardState(boardState string) json.RawMessage {
-	trimmed := strings.TrimSpace(boardState)
+func normalizedJSONState(value string) json.RawMessage {
+	trimmed := strings.TrimSpace(value)
 	if trimmed == "" || !json.Valid([]byte(trimmed)) {
 		return json.RawMessage(`{}`)
 	}
 	return json.RawMessage(trimmed)
+}
+
+func visualStateForUser(item Game, userID uuid.UUID) json.RawMessage {
+	if item.WhiteID == userID {
+		return normalizedJSONState(item.WhiteVisualState)
+	}
+	if item.BlackID == userID {
+		return normalizedJSONState(item.BlackVisualState)
+	}
+	return json.RawMessage(`{}`)
 }
 
 func playerColorForGame(item Game, userID uuid.UUID) string {

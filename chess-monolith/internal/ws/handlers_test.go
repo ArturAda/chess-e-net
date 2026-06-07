@@ -33,12 +33,14 @@ func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ user
 }
 
 type DummyQueueManager struct {
-	AddErr  error
-	Added   chan struct{}
-	Removed chan struct{}
+	AddErr     error
+	Added      chan struct{}
+	Removed    chan struct{}
+	LastClient *Client
 }
 
-func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ int, _ bool, _ time.Duration) error {
+func (d *DummyQueueManager) AddPlayer(client *Client, _ string, _ int, _ bool, _ time.Duration) error {
+	d.LastClient = client
 	if d.Added != nil {
 		d.Added <- struct{}{}
 	}

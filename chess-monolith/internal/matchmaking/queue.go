@@ -184,16 +184,18 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, boardSi
 	}
 
 	newDBGame := &game.Game{
-		ID:          gameID,
-		WhiteID:     p1UUID,
-		BlackID:     p2UUID,
-		Mode:        mode,
-		BoardSize:   actualBoardSize,
-		TimeLimitMs: timeLimit.Milliseconds(),
-		IsRanked:    isRanked,
-		Status:      "active",
-		Turn:        "white",
-		BoardState:  initialBoardState,
+		ID:               gameID,
+		WhiteID:          p1UUID,
+		BlackID:          p2UUID,
+		Mode:             mode,
+		BoardSize:        actualBoardSize,
+		TimeLimitMs:      timeLimit.Milliseconds(),
+		IsRanked:         isRanked,
+		Status:           "active",
+		Turn:             "white",
+		BoardState:       initialBoardState,
+		WhiteVisualState: ws.NormalizeVisualStateString(player1.VisualState),
+		BlackVisualState: ws.NormalizeVisualStateString(player2.VisualState),
 	}
 
 	if err := m.repo.CreateGame(newDBGame); err != nil {
