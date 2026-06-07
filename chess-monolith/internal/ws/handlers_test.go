@@ -43,10 +43,18 @@ type DummyQueueManager struct {
 	Added      chan struct{}
 	Removed    chan struct{}
 	LastClient *Client
+	LastMode   string
+	LastBoard  int
+	LastRanked bool
+	LastTime   time.Duration
 }
 
-func (d *DummyQueueManager) AddPlayer(client *Client, _ string, _ int, _ bool, _ time.Duration) error {
+func (d *DummyQueueManager) AddPlayer(client *Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) error {
 	d.LastClient = client
+	d.LastMode = mode
+	d.LastBoard = boardSize
+	d.LastRanked = isRanked
+	d.LastTime = timeLimit
 	if d.Added != nil {
 		d.Added <- struct{}{}
 	}

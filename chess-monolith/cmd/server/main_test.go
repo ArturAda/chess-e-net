@@ -1,6 +1,7 @@
 package main
 
 import (
+	"chess-monolith/internal/game/session"
 	"chess-monolith/internal/users"
 	"chess-monolith/internal/ws"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type DummyUserRepository struct{}
@@ -42,6 +44,29 @@ func (d *DummyQueueManager) AddPlayer(_ *ws.Client, _ string, _ int, _ bool, _ t
 	return nil
 }
 func (d *DummyQueueManager) RemovePlayer(_ *ws.Client) {}
+
+func TestInitGameRegistryIncludesOnlineBoardSizes(t *testing.T) {
+	registry := initGameRegistry()
+
+	tests := []struct {
+		modeName string
+		size     int
+	}{
+		{modeName: "classic", size: 8},
+		{modeName: "modern10", size: 10},
+		{modeName: "modern12", size: 12},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.modeName, func(t *testing.T) {
+			s, err := session.NewSession(registry, tt.modeName, 10*time.Minute)
+
+			require.NoError(t, err)
+			assert.Equal(t, tt.size, s.Board.Width)
+			assert.Equal(t, tt.size, s.Board.Height)
+		})
+	}
+}
 
 func TestPingRoute(t *testing.T) {
 	gin.SetMode(gin.TestMode)

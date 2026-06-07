@@ -55,9 +55,17 @@ func (d *DummyUserRepo) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.Rati
 	return 1216, 1184, nil
 }
 
-type DummyMode struct{}
+type DummyMode struct {
+	Size int
+}
 
-func (m *DummyMode) Setup() *core.Board                                                   { return core.NewBoard(8, 8) }
+func (m *DummyMode) Setup() *core.Board {
+	size := m.Size
+	if size <= 0 {
+		size = 8
+	}
+	return core.NewBoard(size, size)
+}
 func (m *DummyMode) ValidateMove(b *core.Board, turn core.Color, from, to core.Pos) error { return nil }
 func (m *DummyMode) ApplyMoveSideEffects(b *core.Board, from, to core.Pos)                {}
 func (m *DummyMode) CheckState(b *core.Board, turn core.Color) string                     { return "active" }
@@ -108,6 +116,19 @@ func TestMatchmaker_AddPlayer_UnknownMode(t *testing.T) {
 	assert.Equal(t, ws.ErrorCodeUnknownMode, protocolErr.Code)
 	assert.True(t, protocolErr.Recoverable)
 	assert.Empty(t, mm.casualQueues)
+}
+
+func TestMatchmaker_AddPlayer_ModernMode(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("modern12", &DummyMode{Size: 12})
+	mm := NewMatchmaker(reg, &DummyGameRepo{}, &DummyUserRepo{})
+
+	client := &ws.Client{UserID: "user-1"}
+
+	require.NoError(t, mm.AddPlayer(client, "modern12", 12, false, 30*time.Minute))
+
+	key := QueueKey{Mode: "modern12", BoardSize: 12, TimeLimit: 30 * time.Minute}
+	assert.Len(t, mm.casualQueues[key], 1)
 }
 
 func TestMatchmaker_CasualMatch(t *testing.T) {
@@ -193,6 +214,44 @@ func TestMatchmaker_StartGamePersistsPlayerVisualStates(t *testing.T) {
 	require.Len(t, repo.Created, 1)
 	assert.JSONEq(t, c1.VisualState, repo.Created[0].WhiteVisualState)
 	assert.JSONEq(t, c2.VisualState, repo.Created[0].BlackVisualState)
+}
+
+func TestMatchmaker_StartGameSupportsModernBoardSize(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("modern10", &DummyMode{Size: 10})
+	repo := &DummyGameRepo{}
+	mm := NewMatchmaker(reg, repo, &DummyUserRepo{})
+
+	c1 := &ws.Client{UserID: uuid.New().String(), Send: make(chan []byte, 10)}
+	c2 := &ws.Client{UserID: uuid.New().String(), Send: make(chan []byte, 10)}
+
+	mm.startGame(c1, c2, "modern10", 10, false, 5*time.Minute)
+
+	require.Len(t, repo.Created, 1)
+	assert.Equal(t, "modern10", repo.Created[0].Mode)
+	assert.Equal(t, 10, repo.Created[0].BoardSize)
+	assert.Equal(t, (5 * time.Minute).Milliseconds(), repo.Created[0].TimeLimitMs)
+
+	c1Match := readClientMessage(t, c1)
+	assert.Equal(t, ws.MessageTypeMatchFound, c1Match.Type)
+	var matchPayload ws.MatchFoundPayload
+	require.NoError(t, json.Unmarshal(c1Match.Payload, &matchPayload))
+	assert.Equal(t, "modern10", matchPayload.Mode)
+	assert.Equal(t, 10, matchPayload.BoardSize)
+
+	c1State := readClientMessage(t, c1)
+	assert.Equal(t, ws.MessageTypeGameState, c1State.Type)
+	var statePayload struct {
+		BoardSize int `json:"board_size"`
+		Board     struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"board"`
+	}
+	require.NoError(t, json.Unmarshal(c1State.Payload, &statePayload))
+	assert.Equal(t, 10, statePayload.BoardSize)
+	assert.Equal(t, 10, statePayload.Board.Width)
+	assert.Equal(t, 10, statePayload.Board.Height)
 }
 
 func TestMatchmaker_RankedMatch_Success(t *testing.T) {

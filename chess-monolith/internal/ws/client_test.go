@@ -381,6 +381,53 @@ func TestClient_ReadPump_JoinQueueRejectsBoardSizeMismatch(t *testing.T) {
 	}
 }
 
+func TestClient_ReadPump_JoinQueueModernModeInfersBoardSize(t *testing.T) {
+	hub := NewHub()
+	go hub.Run()
+
+	qm := &DummyQueueManager{Added: make(chan struct{}, 1)}
+	server := httptest.NewServer(mockServeWSWithQueueManager(hub, qm))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http")
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	assert.NoError(t, err)
+	defer func(conn *websocket.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	time.Sleep(50 * time.Millisecond)
+
+	wsMsg := Message{
+		Type:    "JOIN_QUEUE",
+		Payload: json.RawMessage(`{"mode": "modern12", "is_ranked": false, "time_limit": 5}`),
+	}
+
+	err = conn.WriteJSON(wsMsg)
+	assert.NoError(t, err)
+
+	select {
+	case <-qm.Added:
+	case <-time.After(2 * time.Second):
+		t.Fatal("JOIN_QUEUE did not call AddPlayer")
+	}
+
+	resp := readWSMessage(t, conn)
+	assert.Equal(t, MessageTypeQueueJoined, resp.Type)
+
+	var payload QueueJoinedPayload
+	require.NoError(t, json.Unmarshal(resp.Payload, &payload))
+	assert.Equal(t, "modern12", payload.Mode)
+	assert.Equal(t, 12, payload.BoardSize)
+	assert.False(t, payload.IsRanked)
+	assert.Equal(t, 5, payload.TimeLimitMinutes)
+
+	assert.Equal(t, "modern12", qm.LastMode)
+	assert.Equal(t, 12, qm.LastBoard)
+	assert.False(t, qm.LastRanked)
+	assert.Equal(t, 5*time.Minute, qm.LastTime)
+}
+
 func TestClient_ReadPump_JoinQueueError(t *testing.T) {
 	hub := NewHub()
 	go hub.Run()
