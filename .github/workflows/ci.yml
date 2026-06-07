@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ "main", "backend", "backend/**", "unification", "unification/backend/**"]
 
+permissions:
+  contents: write
+
 jobs:
   build-and-test:
     name: Build and Test
