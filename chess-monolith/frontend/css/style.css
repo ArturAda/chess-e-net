@@ -1559,8 +1559,8 @@ body[data-background="dark-room"] .game-title::after {
     min-width: 0;
     line-height: 1.35;
     white-space: normal;
-    overflow-wrap: anywhere;
-    word-break: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
 }
 
 .history-moves-empty {
