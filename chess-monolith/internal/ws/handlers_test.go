@@ -28,6 +28,12 @@ func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 func (d *DummyUserRepository) GetOrCreateRating(_ uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
 	return &users.UserRating{Rating: users.DefaultRating}, nil
 }
+func (d *DummyUserRepository) ListRatingsForUser(_ uuid.UUID) ([]users.UserRating, error) {
+	return nil, nil
+}
+func (d *DummyUserRepository) ListLeaderboard(_ users.RatingScope, _ int) ([]users.LeaderboardEntry, error) {
+	return nil, nil
+}
 func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
 	return 1216, 1184, nil
 }

@@ -171,3 +171,127 @@ func TestRepository_ApplyRatingResultUsesScope(t *testing.T) {
 	assert.Equal(t, DefaultRating, user1Rapid.Rating)
 	assert.Equal(t, 0, user1Rapid.GamesPlayed)
 }
+
+func TestRepository_ListRatingsForUser(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	userID := uuid.New()
+	otherUserID := uuid.New()
+	require.NoError(t, db.Create(&User{
+		ID:           userID,
+		Username:     "rated",
+		Email:        "rated@test.local",
+		PasswordHash: "hash",
+	}).Error)
+	require.NoError(t, db.Create(&User{
+		ID:           otherUserID,
+		Username:     "other-rated",
+		Email:        "other-rated@test.local",
+		PasswordHash: "hash",
+	}).Error)
+
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      userID,
+		Mode:        "classic",
+		BoardSize:   10,
+		TimeLimitMs: 300000,
+		Rating:      1250,
+		GamesPlayed: 2,
+	}).Error)
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      userID,
+		Mode:        "classic",
+		BoardSize:   8,
+		TimeLimitMs: 600000,
+		Rating:      1300,
+		GamesPlayed: 3,
+	}).Error)
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      otherUserID,
+		Mode:        "classic",
+		BoardSize:   8,
+		TimeLimitMs: 600000,
+		Rating:      1400,
+		GamesPlayed: 4,
+	}).Error)
+
+	ratings, err := repo.ListRatingsForUser(userID)
+
+	require.NoError(t, err)
+	require.Len(t, ratings, 2)
+	assert.Equal(t, 8, ratings[0].BoardSize)
+	assert.Equal(t, int64(600000), ratings[0].TimeLimitMs)
+	assert.Equal(t, 10, ratings[1].BoardSize)
+	assert.Equal(t, int64(300000), ratings[1].TimeLimitMs)
+}
+
+func TestRepository_ListLeaderboard(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	leaderID := uuid.New()
+	runnerID := uuid.New()
+	otherScopeUserID := uuid.New()
+	require.NoError(t, db.Create(&User{
+		ID:           leaderID,
+		Username:     "leader",
+		Email:        "leader@test.local",
+		PasswordHash: "hash",
+	}).Error)
+	require.NoError(t, db.Create(&User{
+		ID:           runnerID,
+		Username:     "runner",
+		Email:        "runner@test.local",
+		PasswordHash: "hash",
+	}).Error)
+	require.NoError(t, db.Create(&User{
+		ID:           otherScopeUserID,
+		Username:     "other",
+		Email:        "other@test.local",
+		PasswordHash: "hash",
+	}).Error)
+
+	scope := RatingScope{
+		Mode:        "classic",
+		BoardSize:   8,
+		TimeLimitMs: 600000,
+	}
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      runnerID,
+		Mode:        scope.Mode,
+		BoardSize:   scope.BoardSize,
+		TimeLimitMs: scope.TimeLimitMs,
+		Rating:      1300,
+		GamesPlayed: 3,
+	}).Error)
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      leaderID,
+		Mode:        scope.Mode,
+		BoardSize:   scope.BoardSize,
+		TimeLimitMs: scope.TimeLimitMs,
+		Rating:      1400,
+		GamesPlayed: 5,
+	}).Error)
+	require.NoError(t, db.Create(&UserRating{
+		UserID:      otherScopeUserID,
+		Mode:        scope.Mode,
+		BoardSize:   10,
+		TimeLimitMs: scope.TimeLimitMs,
+		Rating:      1500,
+		GamesPlayed: 8,
+	}).Error)
+
+	leaderboard, err := repo.ListLeaderboard(scope, 50)
+
+	require.NoError(t, err)
+	require.Len(t, leaderboard, 2)
+	assert.Equal(t, leaderID, leaderboard[0].UserID)
+	assert.Equal(t, "leader", leaderboard[0].Username)
+	assert.Equal(t, 1400, leaderboard[0].Rating)
+	assert.Equal(t, runnerID, leaderboard[1].UserID)
+	assert.Equal(t, "runner", leaderboard[1].Username)
+	assert.Equal(t, 1300, leaderboard[1].Rating)
+}

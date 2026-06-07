@@ -45,6 +45,12 @@ func (d *DummyUserRepo) GetOrCreateRating(userID uuid.UUID, _ users.RatingScope)
 	}
 	return &users.UserRating{Rating: rating}, nil
 }
+func (d *DummyUserRepo) ListRatingsForUser(_ uuid.UUID) ([]users.UserRating, error) {
+	return nil, nil
+}
+func (d *DummyUserRepo) ListLeaderboard(_ users.RatingScope, _ int) ([]users.LeaderboardEntry, error) {
+	return nil, nil
+}
 func (d *DummyUserRepo) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
 	return 1216, 1184, nil
 }

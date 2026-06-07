@@ -34,6 +34,39 @@ type RatingScope struct {
 	TimeLimitMs int64
 }
 
+type RatingScopeDTO struct {
+	Mode             string `json:"mode"`
+	BoardSize        int    `json:"board_size"`
+	TimeLimitMs      int64  `json:"time_limit_ms"`
+	TimeLimitMinutes int    `json:"time_limit_minutes"`
+}
+
+type UserRatingDTO struct {
+	RatingScopeDTO
+	Rating      int `json:"rating"`
+	GamesPlayed int `json:"games_played"`
+}
+
+type LeaderboardEntry struct {
+	UserID      uuid.UUID
+	Username    string
+	Rating      int
+	GamesPlayed int
+}
+
+type LeaderboardEntryDTO struct {
+	Rank        int    `json:"rank"`
+	UserID      string `json:"user_id"`
+	Username    string `json:"username"`
+	Rating      int    `json:"rating"`
+	GamesPlayed int    `json:"games_played"`
+}
+
+type LeaderboardDTO struct {
+	Scope   RatingScopeDTO        `json:"scope"`
+	Players []LeaderboardEntryDTO `json:"players"`
+}
+
 type UserRating struct {
 	ID          uuid.UUID `gorm:"type:uuid;primaryKey"`
 	UserID      uuid.UUID `gorm:"type:uuid;not null;uniqueIndex:idx_user_ratings_scope"`

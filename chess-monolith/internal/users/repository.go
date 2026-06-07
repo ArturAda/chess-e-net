@@ -17,6 +17,8 @@ type Repository interface {
 	GetUserByID(id uuid.UUID) (*User, error)
 	UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error
 	GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error)
+	ListRatingsForUser(userID uuid.UUID) ([]UserRating, error)
+	ListLeaderboard(scope RatingScope, limit int) ([]LeaderboardEntry, error)
 	ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingScope, user1Score float64) (int, int, error)
 }
 
@@ -84,6 +86,39 @@ func (r *repository) UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRa
 
 func (r *repository) GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error) {
 	return r.getOrCreateRating(r.db, userID, normalizeRatingScope(scope))
+}
+
+func (r *repository) ListRatingsForUser(userID uuid.UUID) ([]UserRating, error) {
+	var ratings []UserRating
+	err := r.db.
+		Where("user_id = ?", userID).
+		Order("mode ASC, board_size ASC, time_limit_ms ASC").
+		Find(&ratings).Error
+	if err != nil {
+		return nil, ErrDatabase
+	}
+
+	return ratings, nil
+}
+
+func (r *repository) ListLeaderboard(scope RatingScope, limit int) ([]LeaderboardEntry, error) {
+	scope = normalizeRatingScope(scope)
+	limit = normalizeLeaderboardLimit(limit)
+
+	var rows []LeaderboardEntry
+	err := r.db.Table("user_ratings").
+		Select("user_ratings.user_id, users.username, user_ratings.rating, user_ratings.games_played").
+		Joins("JOIN users ON users.id = user_ratings.user_id").
+		Where("user_ratings.mode = ? AND user_ratings.board_size = ? AND user_ratings.time_limit_ms = ?",
+			scope.Mode, scope.BoardSize, scope.TimeLimitMs).
+		Order("user_ratings.rating DESC, user_ratings.games_played DESC, users.username ASC").
+		Limit(limit).
+		Scan(&rows).Error
+	if err != nil {
+		return nil, ErrDatabase
+	}
+
+	return rows, nil
 }
 
 func (r *repository) ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingScope, user1Score float64) (int, int, error) {
@@ -214,4 +249,14 @@ func normalizeRatingScope(scope RatingScope) RatingScope {
 		scope.TimeLimitMs = int64((10 * 60) * 1000)
 	}
 	return scope
+}
+
+func normalizeLeaderboardLimit(limit int) int {
+	if limit <= 0 {
+		return 50
+	}
+	if limit > 100 {
+		return 100
+	}
+	return limit
 }
