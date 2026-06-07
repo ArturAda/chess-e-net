@@ -3,7 +3,9 @@
 [🇺🇸 English](README.md) | [🇷🇺 Русский](README.ru.md)
 
 [![Build and Test](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml/badge.svg)](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml)
-<!-- coverage-badge -->[![Coverage](https://img.shields.io/badge/Coverage-unknown-lightgrey.svg)](#)<!-- /coverage-badge -->
+<!-- coverage-badge-start -->
+[![Coverage](https://img.shields.io/badge/Coverage-unknown-lightgrey.svg)](#)
+<!-- coverage-badge-end -->
 
 Chessemag is a modern, extensible multiplayer chess platform built with Go (Golang) and a vanilla JavaScript frontend. It supports classic 8x8 chess alongside custom modern variants (10x10, 12x12), real-time matchmaking, ELO-based ranked play, and interactive game histories.
 
@@ -89,7 +91,7 @@ To run the entire stack (Database + Application) via Docker Compose:
 
 ```bash
 cd chess-monolith
-docker-compose up --build
+docker compose up --build
 ```
 This will start PostgreSQL and the Go backend automatically. Note: You still need to ensure the frontend is built into `frontend/dist` before building the Docker image if you want it served by the Go binary.
 

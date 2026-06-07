@@ -91,7 +91,7 @@ To run the entire stack (Database + Application) via Docker Compose:
 
 ```bash
 cd chess-monolith
-docker-compose up --build
+docker compose up --build
 ```
 This will start PostgreSQL and the Go backend automatically. Note: You still need to ensure the frontend is built into `frontend/dist` before building the Docker image if you want it served by the Go binary.
 

@@ -91,7 +91,7 @@ FRONTEND_DIST_DIR=frontend/dist
 
 ```bash
 cd chess-monolith
-docker-compose up --build
+docker compose up --build
 ```
 Это автоматически запустит PostgreSQL и бэкенд на Go. Примечание: вам все равно нужно убедиться, что фронтенд собран в `frontend/dist` перед сборкой Docker-образа, если вы хотите, чтобы его раздавал бинарный файл Go.
 

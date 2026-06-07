@@ -41,31 +41,35 @@ jobs:
       - name: Calculate coverage and generate badge
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          COVERAGE=$(go tool cover -func=coverage.out | grep total | awk '{print $3}')
+          COVERAGE=$(go tool cover -func=coverage.out | awk '/total:/ {print $3}')
           echo "Total coverage: $COVERAGE"
-          
-          # Remove % and determine color
-          COVERAGE_NUM=${COVERAGE//%/}
+
+          COVERAGE_NUM=${COVERAGE%\%}
           COLOR="red"
-          if (( $(echo "$COVERAGE_NUM > 80" | awk '{print $1}') )); then
+          if awk "BEGIN {exit !($COVERAGE_NUM > 80)}"; then
             COLOR="brightgreen"
-          elif (( $(echo "$COVERAGE_NUM > 50" | awk '{print $1}') )); then
+          elif awk "BEGIN {exit !($COVERAGE_NUM > 50)}"; then
             COLOR="yellow"
           fi
-          
+
           BADGE_URL="https://img.shields.io/badge/Coverage-${COVERAGE//%/%25}-${COLOR}.svg"
-          
-          # We use sed to replace the placeholder in README.md and README.ru.md
-          cd ..
-          sed -i "s|<!-- coverage-badge -->.*<!-- /coverage-badge -->|<!-- coverage-badge -->[![Coverage]($BADGE_URL)](#)<!-- /coverage-badge -->|g" README.md
-          sed -i "s|<!-- coverage-badge -->.*<!-- /coverage-badge -->|<!-- coverage-badge -->[![Coverage]($BADGE_URL)](#)<!-- /coverage-badge -->|g" README.ru.md
+          README_ROOT="${GITHUB_WORKSPACE}"
+
+          update_badge() {
+            local file="$1"
+            perl -0pi -e "s|<!-- coverage-badge-start -->.*?<!-- coverage-badge-end -->|<!-- coverage-badge-start -->\n[![Coverage]($BADGE_URL)](#)\n<!-- coverage-badge-end -->|s" "$file"
+          }
+
+          update_badge "$README_ROOT/README.md"
+          update_badge "$README_ROOT/README.ru.md"
 
       - name: Commit and push changes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
-          cd ..
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md README.ru.md
-          git diff-index --quiet HEAD || git commit -m "docs: Update coverage badge"
-          git push
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "docs: Update coverage badge"
+            git push
+          fi

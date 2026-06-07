@@ -3,7 +3,9 @@
 [🇺🇸 English](README.md) | [🇷🇺 Русский](README.ru.md)
 
 [![Build and Test](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml/badge.svg)](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml)
-<!-- coverage-badge -->[![Coverage](https://img.shields.io/badge/Coverage-unknown-lightgrey.svg)](#)<!-- /coverage-badge -->
+<!-- coverage-badge-start -->
+[![Coverage](https://img.shields.io/badge/Coverage-unknown-lightgrey.svg)](#)
+<!-- coverage-badge-end -->
 
 Chessemag — это современная, расширяемая многопользовательская платформа для игры в шахматы, созданная с использованием Go (Golang) и чистого JavaScript на фронтенде. Платформа поддерживает классические шахматы 8x8, а также современные варианты (10x10, 12x12), подбор игроков в реальном времени, рейтинговые игры на основе ELO и интерактивную историю партий.
 
