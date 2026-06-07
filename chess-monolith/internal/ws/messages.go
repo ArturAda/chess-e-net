@@ -8,16 +8,19 @@ import (
 )
 
 const (
-	MessageTypeGameState    = "GAME_STATE"
-	MessageTypeQueueJoined  = "QUEUE_JOINED"
-	MessageTypeMatchFound   = "MATCH_FOUND"
-	MessageTypeMoveRejected = "MOVE_REJECTED"
-	MessageTypeError        = "ERROR"
-	MessageTypeDrawOffer    = "DRAW_OFFER"
-	MessageTypeDrawAccepted = "DRAW_ACCEPTED"
-	MessageTypeDrawDecline  = "DRAW_DECLINE"
-	MessageTypeDrawExpired  = "DRAW_EXPIRED"
-	MessageTypeChatSticker  = "CHAT_STICKER"
+	MessageTypeGameState             = "GAME_STATE"
+	MessageTypeQueueJoined           = "QUEUE_JOINED"
+	MessageTypeMatchFound            = "MATCH_FOUND"
+	MessageTypeMoveRejected          = "MOVE_REJECTED"
+	MessageTypeError                 = "ERROR"
+	MessageTypeLeaveGame             = "LEAVE_GAME"
+	MessageTypePlayerNetworkWaiting  = "PLAYER_NETWORK_WAITING"
+	MessageTypePlayerNetworkRestored = "PLAYER_NETWORK_RESTORED"
+	MessageTypeDrawOffer             = "DRAW_OFFER"
+	MessageTypeDrawAccepted          = "DRAW_ACCEPTED"
+	MessageTypeDrawDecline           = "DRAW_DECLINE"
+	MessageTypeDrawExpired           = "DRAW_EXPIRED"
+	MessageTypeChatSticker           = "CHAT_STICKER"
 )
 
 const (
@@ -104,6 +107,22 @@ type ChatStickerPayload struct {
 	Label          string    `json:"label"`
 	Src            string    `json:"src"`
 	SentAt         time.Time `json:"sent_at"`
+}
+
+type PlayerNetworkWaitingPayload struct {
+	UserID      string    `json:"user_id"`
+	Username    string    `json:"username,omitempty"`
+	Color       string    `json:"color"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	RemainingMs int64     `json:"remaining_ms"`
+	Message     string    `json:"message"`
+}
+
+type PlayerNetworkRestoredPayload struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username,omitempty"`
+	Color    string `json:"color"`
+	Message  string `json:"message"`
 }
 
 type ProtocolError struct {

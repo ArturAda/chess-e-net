@@ -13,7 +13,7 @@ import (
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
+	pingPeriod     = networkHeartbeatPing
 	maxMessageSize = 1024 // 1 KB для шахматных ходов более чем достаточно
 )
 
@@ -36,6 +36,8 @@ type Client struct {
 	ActiveGame *session.GameSession
 	Color      core.Color
 	Opponent   *Client
+
+	networkActivity networkActivityState
 }
 
 // Message - универсальная структура для обмена JSON
@@ -60,20 +62,7 @@ func (c *Client) ReadPump() {
 			c.QueueManager.RemovePlayer(c)
 		}
 
-		if c.ActiveGame != nil {
-			c.ActiveGame.Mu.Lock()
-			status := c.ActiveGame.Status
-			c.ActiveGame.Mu.Unlock()
-
-			if status == "active" {
-				resignStatus := "white_won_resign"
-				if c.Color == core.White {
-					resignStatus = "black_won_resign"
-				}
-				c.ActiveGame.EndGame(resignStatus)
-				log.Printf("Player %s disconnected. Technical defeat applied.", c.UserID)
-			}
-		}
+		c.handleDisconnectLoss()
 
 		c.Hub.Unregister <- c
 		err := c.Conn.Close()
@@ -81,6 +70,9 @@ func (c *Client) ReadPump() {
 			return
 		}
 	}()
+
+	networkDone := make(chan struct{})
+	defer close(networkDone)
 
 	c.Conn.SetReadLimit(maxMessageSize)
 	err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -90,7 +82,9 @@ func (c *Client) ReadPump() {
 	}
 
 	c.Conn.SetPongHandler(func(string) error {
-		err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		now := time.Now()
+		c.markNetworkActivity(now)
+		err := c.Conn.SetReadDeadline(now.Add(pongWait))
 
 		if err != nil {
 			return err
@@ -98,6 +92,9 @@ func (c *Client) ReadPump() {
 
 		return nil
 	})
+
+	c.markNetworkActivity(time.Now())
+	go c.monitorNetworkActivity(networkDone)
 
 	for {
 		_, message, err := c.Conn.ReadMessage()
@@ -107,6 +104,8 @@ func (c *Client) ReadPump() {
 			}
 			break
 		}
+
+		c.markNetworkActivity(time.Now())
 
 		var wsMsg Message
 		if err := json.Unmarshal(message, &wsMsg); err != nil {
@@ -230,20 +229,10 @@ func (c *Client) ReadPump() {
 			c.QueueManager.RemovePlayer(c)
 
 		case "RESIGN":
-			if c.ActiveGame != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
+			c.handleResign()
 
-				if status == "active" {
-					resignStatus := "white_won_resign"
-					if c.Color == core.White {
-						resignStatus = "black_won_resign"
-					}
-					log.Printf("Player %s resigned.", c.UserID)
-					c.ActiveGame.EndGame(resignStatus)
-				}
-			}
+		case MessageTypeLeaveGame:
+			c.handleLeaveGame()
 
 		case "DRAW_OFFER":
 			c.handleDrawOffer()

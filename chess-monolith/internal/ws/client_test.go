@@ -509,6 +509,93 @@ func TestClient_ReadPump_Move(t *testing.T) {
 	assert.Equal(t, 1, hub.Len(), "Client should survive a MOVE payload parse")
 }
 
+func TestClient_LeaveGameEndsActiveGameAsCurrentPlayerLoss(t *testing.T) {
+	white, _, game := newActiveGameTestClients()
+
+	white.handleLeaveGame()
+
+	assert.Equal(t, "black_won_resign", game.Status)
+}
+
+func TestClient_ResignEndsActiveGameAsCurrentPlayerLoss(t *testing.T) {
+	_, black, game := newActiveGameTestClients()
+
+	black.handleResign()
+
+	assert.Equal(t, "white_won_resign", game.Status)
+}
+
+func TestClient_DisconnectLossIgnoresFinishedGame(t *testing.T) {
+	white, _, game := newActiveGameTestClients()
+	game.Status = "draw"
+
+	white.handleDisconnectLoss()
+
+	assert.Equal(t, "draw", game.Status)
+}
+
+func TestClient_NetworkActivityStartsWaitingAfterIdle(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+	now := time.Now()
+	waitStartedAt := now.Add(NetworkIdleThreshold + time.Millisecond)
+
+	white.markNetworkActivity(now)
+	white.checkNetworkActivity(waitStartedAt)
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypePlayerNetworkWaiting, whiteMsg.Type)
+	assert.Equal(t, MessageTypePlayerNetworkWaiting, blackMsg.Type)
+
+	var payload PlayerNetworkWaitingPayload
+	require.NoError(t, json.Unmarshal(blackMsg.Payload, &payload))
+	assert.Equal(t, "white-user", payload.UserID)
+	assert.Equal(t, "White", payload.Username)
+	assert.Equal(t, "white", payload.Color)
+	assert.Equal(t, NetworkLossGrace.Milliseconds(), payload.RemainingMs)
+	assert.True(t, payload.ExpiresAt.Equal(waitStartedAt.Add(NetworkLossGrace)))
+	assert.Equal(t, "Waiting for White network.", payload.Message)
+}
+
+func TestClient_NetworkActivityRestoredNotifiesBothPlayers(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+	now := time.Now()
+
+	white.markNetworkActivity(now)
+	white.checkNetworkActivity(now.Add(NetworkIdleThreshold + time.Millisecond))
+	readClientMessage(t, white.Send)
+	readClientMessage(t, black.Send)
+
+	white.markNetworkActivity(now.Add(NetworkIdleThreshold + time.Second))
+
+	whiteMsg := readClientMessage(t, white.Send)
+	blackMsg := readClientMessage(t, black.Send)
+	assert.Equal(t, MessageTypePlayerNetworkRestored, whiteMsg.Type)
+	assert.Equal(t, MessageTypePlayerNetworkRestored, blackMsg.Type)
+
+	var payload PlayerNetworkRestoredPayload
+	require.NoError(t, json.Unmarshal(blackMsg.Payload, &payload))
+	assert.Equal(t, "white-user", payload.UserID)
+	assert.Equal(t, "White", payload.Username)
+	assert.Equal(t, "white", payload.Color)
+	assert.Equal(t, "White network restored.", payload.Message)
+}
+
+func TestClient_NetworkActivityTimeoutEndsGameAsCurrentPlayerLoss(t *testing.T) {
+	white, black, game := newActiveGameTestClients()
+	now := time.Now()
+	waitStartedAt := now.Add(NetworkIdleThreshold + time.Millisecond)
+
+	white.markNetworkActivity(now)
+	white.checkNetworkActivity(waitStartedAt)
+	readClientMessage(t, white.Send)
+	readClientMessage(t, black.Send)
+
+	white.checkNetworkActivity(waitStartedAt.Add(NetworkLossGrace + time.Millisecond))
+
+	assert.Equal(t, "black_won_resign", game.Status)
+}
+
 func TestClient_DrawOfferSendsPayloadToBothPlayers(t *testing.T) {
 	white, black, game := newActiveGameTestClients()
 
