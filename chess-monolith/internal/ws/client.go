@@ -13,8 +13,8 @@ import (
 const (
 	writeWait      = 10 * time.Second
 	pongWait       = 60 * time.Second
-	pingPeriod     = (pongWait * 9) / 10
-	maxMessageSize = 1024 // 1 KB для шахматных ходов более чем достаточно
+	pingPeriod     = networkHeartbeatPing
+	maxMessageSize = 16 * 1024 // JOIN_QUEUE can include a compact visual snapshot.
 )
 
 // QueueManager абстрагирует логику матчмейкинга от сокетов
@@ -32,10 +32,13 @@ type Client struct {
 	Username     string
 	Rating       int
 	QueueManager QueueManager
+	VisualState  string
 
 	ActiveGame *session.GameSession
 	Color      core.Color
 	Opponent   *Client
+
+	networkActivity networkActivityState
 }
 
 // Message - универсальная структура для обмена JSON
@@ -60,20 +63,7 @@ func (c *Client) ReadPump() {
 			c.QueueManager.RemovePlayer(c)
 		}
 
-		if c.ActiveGame != nil {
-			c.ActiveGame.Mu.Lock()
-			status := c.ActiveGame.Status
-			c.ActiveGame.Mu.Unlock()
-
-			if status == "active" {
-				resignStatus := "white_won_resign"
-				if c.Color == core.White {
-					resignStatus = "black_won_resign"
-				}
-				c.ActiveGame.EndGame(resignStatus)
-				log.Printf("Player %s disconnected. Technical defeat applied.", c.UserID)
-			}
-		}
+		c.handleDisconnectLoss()
 
 		c.Hub.Unregister <- c
 		err := c.Conn.Close()
@@ -81,6 +71,9 @@ func (c *Client) ReadPump() {
 			return
 		}
 	}()
+
+	networkDone := make(chan struct{})
+	defer close(networkDone)
 
 	c.Conn.SetReadLimit(maxMessageSize)
 	err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
@@ -90,7 +83,9 @@ func (c *Client) ReadPump() {
 	}
 
 	c.Conn.SetPongHandler(func(string) error {
-		err := c.Conn.SetReadDeadline(time.Now().Add(pongWait))
+		now := time.Now()
+		c.markNetworkActivity(now)
+		err := c.Conn.SetReadDeadline(now.Add(pongWait))
 
 		if err != nil {
 			return err
@@ -98,6 +93,9 @@ func (c *Client) ReadPump() {
 
 		return nil
 	})
+
+	c.markNetworkActivity(time.Now())
+	go c.monitorNetworkActivity(networkDone)
 
 	for {
 		_, message, err := c.Conn.ReadMessage()
@@ -107,6 +105,8 @@ func (c *Client) ReadPump() {
 			}
 			break
 		}
+
+		c.markNetworkActivity(time.Now())
 
 		var wsMsg Message
 		if err := json.Unmarshal(message, &wsMsg); err != nil {
@@ -180,10 +180,11 @@ func (c *Client) ReadPump() {
 		case "JOIN_QUEUE":
 			// Ожидаем JSON: {"mode": "classic", "is_ranked": true, "time_limit": 10}
 			var joinReq struct {
-				Mode      string `json:"mode"`
-				BoardSize int    `json:"board_size"`
-				IsRanked  bool   `json:"is_ranked"`
-				TimeLimit int    `json:"time_limit"` // Время в минутах
+				Mode        string          `json:"mode"`
+				BoardSize   int             `json:"board_size"`
+				IsRanked    bool            `json:"is_ranked"`
+				TimeLimit   int             `json:"time_limit"` // Время в минутах
+				VisualState json.RawMessage `json:"visual_state"`
 			}
 
 			if err := json.Unmarshal(wsMsg.Payload, &joinReq); err != nil {
@@ -214,6 +215,7 @@ func (c *Client) ReadPump() {
 			}
 
 			timeLimit := time.Duration(joinReq.TimeLimit) * time.Minute
+			c.VisualState = NormalizeVisualState(joinReq.VisualState)
 			if err := c.QueueManager.AddPlayer(c, joinReq.Mode, boardSize, joinReq.IsRanked, timeLimit); err != nil {
 				c.SendProtocolError(err, ErrorCodeQueueFailed)
 				continue
@@ -230,54 +232,27 @@ func (c *Client) ReadPump() {
 			c.QueueManager.RemovePlayer(c)
 
 		case "RESIGN":
-			if c.ActiveGame != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
+			c.handleResign()
 
-				if status == "active" {
-					resignStatus := "white_won_resign"
-					if c.Color == core.White {
-						resignStatus = "black_won_resign"
-					}
-					log.Printf("Player %s resigned.", c.UserID)
-					c.ActiveGame.EndGame(resignStatus)
-				}
-			}
+		case MessageTypeLeaveGame:
+			c.handleLeaveGame()
 
 		case "DRAW_OFFER":
-			if c.ActiveGame != nil && c.Opponent != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
-
-				if status == "active" {
-					// Пересылаем предложение оппоненту
-					c.Opponent.SendMessage(MessageTypeDrawOffer, nil)
-					log.Printf("Player %s offered a draw.", c.UserID)
-				}
-			}
+			c.handleDrawOffer()
 
 		case "DRAW_ACCEPT":
-			if c.ActiveGame != nil {
-				c.ActiveGame.Mu.Lock()
-				status := c.ActiveGame.Status
-				c.ActiveGame.Mu.Unlock()
-
-				if status == "active" {
-					log.Printf("Player %s accepted the draw.", c.UserID)
-					// Метод processGameEnd сам всё сохранит, пересчитает Эло
-					// и разошлет финальный GAME_STATE обоим игрокам
-					c.ActiveGame.EndGame("draw")
-				}
-			}
+			c.handleDrawAccept()
 
 		case "DRAW_DECLINE":
-			if c.ActiveGame != nil && c.Opponent != nil {
-				// Уведомляем первого игрока, что ничья отклонена
-				c.Opponent.SendMessage(MessageTypeDrawDecline, nil)
-				log.Printf("Player %s declined the draw.", c.UserID)
+			c.handleDrawDecline()
+
+		case "CHAT_STICKER":
+			var stickerReq ChatStickerRequest
+			if err := json.Unmarshal(wsMsg.Payload, &stickerReq); err != nil {
+				c.SendError(ErrorCodeInvalidMessage, "Invalid chat sticker payload", true)
+				continue
 			}
+			c.handleChatSticker(stickerReq)
 
 		default:
 			log.Printf("Unknown message type: %s", wsMsg.Type)

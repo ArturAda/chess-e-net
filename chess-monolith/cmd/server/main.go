@@ -10,6 +10,7 @@ import (
 	"chess-monolith/internal/game"
 	"chess-monolith/internal/game/core"
 	"chess-monolith/internal/game/modes/classic"
+	"chess-monolith/internal/game/modes/modern"
 	"chess-monolith/internal/matchmaking"
 	"chess-monolith/internal/users"
 	"chess-monolith/internal/ws"
@@ -35,6 +36,7 @@ func initDB(dsn string) *gorm.DB {
 func initGameRegistry() *core.Registry {
 	registry := core.NewRegistry()
 	classic.Register(registry) // Добавляем классические шахматы
+	modern.Register(registry)  // Добавляем 10x10 и 12x12 online modes
 	// TODO В будущем добавить: chess960.Register(registry) и т.д.
 	return registry
 }

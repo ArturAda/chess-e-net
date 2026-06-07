@@ -28,17 +28,33 @@ func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 func (d *DummyUserRepository) GetOrCreateRating(_ uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
 	return &users.UserRating{Rating: users.DefaultRating}, nil
 }
+func (d *DummyUserRepository) ListRatingsForUser(_ uuid.UUID) ([]users.UserRating, error) {
+	return nil, nil
+}
+func (d *DummyUserRepository) ListLeaderboard(_ users.RatingScope, _ int) ([]users.LeaderboardEntry, error) {
+	return nil, nil
+}
 func (d *DummyUserRepository) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
 	return 1216, 1184, nil
 }
 
 type DummyQueueManager struct {
-	AddErr  error
-	Added   chan struct{}
-	Removed chan struct{}
+	AddErr     error
+	Added      chan struct{}
+	Removed    chan struct{}
+	LastClient *Client
+	LastMode   string
+	LastBoard  int
+	LastRanked bool
+	LastTime   time.Duration
 }
 
-func (d *DummyQueueManager) AddPlayer(_ *Client, _ string, _ int, _ bool, _ time.Duration) error {
+func (d *DummyQueueManager) AddPlayer(client *Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) error {
+	d.LastClient = client
+	d.LastMode = mode
+	d.LastBoard = boardSize
+	d.LastRanked = isRanked
+	d.LastTime = timeLimit
 	if d.Added != nil {
 		d.Added <- struct{}{}
 	}

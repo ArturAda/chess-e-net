@@ -12,28 +12,38 @@ func abs(x int) int {
 	return x
 }
 
-type Mode struct{}
+type Mode struct {
+	boardSize int
+}
+
+func NewMode(boardSize int) *Mode {
+	if boardSize != 8 && boardSize != 10 && boardSize != 12 {
+		boardSize = 8
+	}
+	return &Mode{boardSize: boardSize}
+}
 
 func Register(r *core.Registry) {
-	r.Register("classic", &Mode{})
+	r.Register("classic", NewMode(8))
 }
 
 func (m *Mode) Setup() *core.Board {
-	b := core.NewBoard(8, 8)
+	size := m.size()
+	b := core.NewBoard(size, size)
 
 	newPiece := func(figureType string, color core.Color) core.Piece {
 		return core.Piece{Type: figureType, Color: color, Meta: make(map[string]any)}
 	}
 
-	for i := 0; i < 8; i++ {
+	for i := 0; i < size; i++ {
 		b.Grid[core.Pos{X: i, Y: 1}] = newPiece("pawn", core.White)
-		b.Grid[core.Pos{X: i, Y: 6}] = newPiece("pawn", core.Black)
+		b.Grid[core.Pos{X: i, Y: size - 2}] = newPiece("pawn", core.Black)
 	}
 
-	order := []string{"rook", "knight", "bishop", "queen", "king", "bishop", "knight", "rook"}
+	order := backRankForSize(size)
 	for i, ft := range order {
 		b.Grid[core.Pos{X: i, Y: 0}] = newPiece(ft, core.White)
-		b.Grid[core.Pos{X: i, Y: 7}] = newPiece(ft, core.Black)
+		b.Grid[core.Pos{X: i, Y: size - 1}] = newPiece(ft, core.Black)
 	}
 
 	return b
@@ -47,7 +57,7 @@ func (m *Mode) validateGeometry(board *core.Board, piece core.Piece, from, to co
 	case "pawn":
 		dir, startY := 1, 1
 		if piece.Color == core.Black {
-			dir, startY = -1, 6
+			dir, startY = -1, board.Height-2
 		}
 
 		if dx == 0 && dy == dir && !targetOk {
@@ -96,8 +106,7 @@ func (m *Mode) validateGeometry(board *core.Board, piece core.Piece, from, to co
 		// Рокировка (если король и ладья не ходили)
 		moved, _ := piece.Meta["moved"].(bool)
 		if !moved && dy == 0 && adx == 2 {
-			rookX := 7
-
+			rookX := board.Width - 1
 			if to.X < from.X {
 				rookX = 0
 			}
@@ -242,10 +251,11 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 
 	// 1. Рокировка (сдвиг ладьи)
 	if piece.Type == "king" && abs(from.X-to.X) == 2 {
-		rookFrom, rookTo := core.Pos{X: 7, Y: from.Y}, core.Pos{X: 5, Y: from.Y}
-
+		rookFrom := core.Pos{X: board.Width - 1, Y: from.Y}
+		rookTo := core.Pos{X: to.X - 1, Y: from.Y}
 		if to.X < from.X {
-			rookFrom, rookTo = core.Pos{X: 0, Y: from.Y}, core.Pos{X: 3, Y: from.Y}
+			rookFrom = core.Pos{X: 0, Y: from.Y}
+			rookTo = core.Pos{X: to.X + 1, Y: from.Y}
 		}
 
 		rook := board.Grid[rookFrom]
@@ -268,7 +278,7 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	delete(board.Grid, from)
 
 	// 3. Превращение пешки в ферзя
-	if piece.Type == "pawn" && (to.Y == 0 || to.Y == 7) {
+	if piece.Type == "pawn" && (to.Y == 0 || to.Y == board.Height-1) {
 		piece.Type = "queen"
 	}
 
@@ -317,4 +327,22 @@ func (m *Mode) CheckState(board *core.Board, turn core.Color) string {
 		return "draw" // Нет ходов, но и нет шаха = Пат
 	}
 	return "active"
+}
+
+func (m *Mode) size() int {
+	if m == nil || m.boardSize <= 0 {
+		return 8
+	}
+	return m.boardSize
+}
+
+func backRankForSize(size int) []string {
+	switch size {
+	case 10:
+		return []string{"rook", "knight", "knight", "bishop", "queen", "king", "bishop", "knight", "knight", "rook"}
+	case 12:
+		return []string{"rook", "knight", "bishop", "bishop", "knight", "queen", "king", "knight", "bishop", "bishop", "knight", "rook"}
+	default:
+		return []string{"rook", "knight", "bishop", "queen", "king", "bishop", "knight", "rook"}
+	}
 }

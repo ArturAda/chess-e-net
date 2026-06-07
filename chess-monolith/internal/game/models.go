@@ -19,7 +19,9 @@ type Game struct {
 	Status      string `gorm:"type:varchar(20);default:'active'"` // 'active', 'draw', 'white_won', 'black_won'
 	Turn        string `gorm:"type:varchar(10);default:'white'"`
 
-	BoardState string `gorm:"type:text"` // История ходов и текущая расстановка фигур
+	BoardState       string `gorm:"type:text"` // История ходов и текущая расстановка фигур
+	WhiteVisualState string `gorm:"type:text;default:'{}';not null"`
+	BlackVisualState string `gorm:"type:text;default:'{}';not null"`
 
 	WinnerID  *uuid.UUID `gorm:"type:uuid"`
 	CreatedAt time.Time

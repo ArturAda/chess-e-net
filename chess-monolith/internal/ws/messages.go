@@ -8,13 +8,19 @@ import (
 )
 
 const (
-	MessageTypeGameState    = "GAME_STATE"
-	MessageTypeQueueJoined  = "QUEUE_JOINED"
-	MessageTypeMatchFound   = "MATCH_FOUND"
-	MessageTypeMoveRejected = "MOVE_REJECTED"
-	MessageTypeError        = "ERROR"
-	MessageTypeDrawOffer    = "DRAW_OFFER"
-	MessageTypeDrawDecline  = "DRAW_DECLINE"
+	MessageTypeGameState             = "GAME_STATE"
+	MessageTypeQueueJoined           = "QUEUE_JOINED"
+	MessageTypeMatchFound            = "MATCH_FOUND"
+	MessageTypeMoveRejected          = "MOVE_REJECTED"
+	MessageTypeError                 = "ERROR"
+	MessageTypeLeaveGame             = "LEAVE_GAME"
+	MessageTypePlayerNetworkWaiting  = "PLAYER_NETWORK_WAITING"
+	MessageTypePlayerNetworkRestored = "PLAYER_NETWORK_RESTORED"
+	MessageTypeDrawOffer             = "DRAW_OFFER"
+	MessageTypeDrawAccepted          = "DRAW_ACCEPTED"
+	MessageTypeDrawDecline           = "DRAW_DECLINE"
+	MessageTypeDrawExpired           = "DRAW_EXPIRED"
+	MessageTypeChatSticker           = "CHAT_STICKER"
 )
 
 const (
@@ -26,6 +32,9 @@ const (
 	ErrorCodeNotYourTurn     = "NOT_YOUR_TURN"
 	ErrorCodeInvalidMove     = "INVALID_MOVE"
 	ErrorCodeGameAlreadyOver = "GAME_ALREADY_OVER"
+	ErrorCodeDrawOfferActive = "DRAW_OFFER_ACTIVE"
+	ErrorCodeDrawOfferState  = "DRAW_OFFER_STATE"
+	ErrorCodeInvalidSticker  = "INVALID_STICKER"
 	ErrorCodeInternal        = "INTERNAL_ERROR"
 )
 
@@ -64,6 +73,56 @@ type MoveRejectedPayload struct {
 	Code        string `json:"code"`
 	Message     string `json:"message"`
 	Recoverable bool   `json:"recoverable"`
+}
+
+type DrawOfferPayload struct {
+	OfferID         string    `json:"offer_id"`
+	OfferedBy       string    `json:"offered_by"`
+	OfferedByUserID string    `json:"offered_by_user_id"`
+	ExpiresAt       time.Time `json:"expires_at"`
+	ExpiresInMs     int64     `json:"expires_in_ms"`
+	Message         string    `json:"message"`
+}
+
+type DrawOfferResultPayload struct {
+	OfferID           string `json:"offer_id"`
+	OfferedBy         string `json:"offered_by"`
+	OfferedByUserID   string `json:"offered_by_user_id"`
+	RespondedBy       string `json:"responded_by,omitempty"`
+	RespondedByUserID string `json:"responded_by_user_id,omitempty"`
+	Message           string `json:"message"`
+}
+
+type ChatStickerRequest struct {
+	StickerID string `json:"sticker_id"`
+}
+
+type ChatStickerPayload struct {
+	MessageID      string    `json:"message_id"`
+	GameID         string    `json:"game_id,omitempty"`
+	SenderUserID   string    `json:"sender_user_id"`
+	SenderUsername string    `json:"sender_username,omitempty"`
+	SenderColor    string    `json:"sender_color"`
+	StickerID      string    `json:"sticker_id"`
+	Label          string    `json:"label"`
+	Src            string    `json:"src"`
+	SentAt         time.Time `json:"sent_at"`
+}
+
+type PlayerNetworkWaitingPayload struct {
+	UserID      string    `json:"user_id"`
+	Username    string    `json:"username,omitempty"`
+	Color       string    `json:"color"`
+	ExpiresAt   time.Time `json:"expires_at"`
+	RemainingMs int64     `json:"remaining_ms"`
+	Message     string    `json:"message"`
+}
+
+type PlayerNetworkRestoredPayload struct {
+	UserID   string `json:"user_id"`
+	Username string `json:"username,omitempty"`
+	Color    string `json:"color"`
+	Message  string `json:"message"`
 }
 
 type ProtocolError struct {

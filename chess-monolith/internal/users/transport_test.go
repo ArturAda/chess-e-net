@@ -35,6 +35,22 @@ func (m *MockService) GetCurrentUser(token string) (*UserProfile, error) {
 	return args.Get(0).(*UserProfile), args.Error(1)
 }
 
+func (m *MockService) GetCurrentUserRatings(token string) ([]UserRatingDTO, error) {
+	args := m.Called(token)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).([]UserRatingDTO), args.Error(1)
+}
+
+func (m *MockService) GetLeaderboard(scope RatingScope, limit int) (*LeaderboardDTO, error) {
+	args := m.Called(scope, limit)
+	if args.Get(0) == nil {
+		return nil, args.Error(1)
+	}
+	return args.Get(0).(*LeaderboardDTO), args.Error(1)
+}
+
 func TestHandler_Register_Scenarios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -313,6 +329,179 @@ func TestHandler_Me_Scenarios(t *testing.T) {
 			mockService.AssertExpectations(t)
 		})
 	}
+}
+
+func TestHandler_MeRatings_Scenarios(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		authHeader     string
+		setupMock      func(mockService *MockService)
+		expectedStatus int
+		assertBody     func(t *testing.T, body []byte)
+	}{
+		{
+			name:       "Success",
+			authHeader: "Bearer valid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUserRatings", "valid-token").Return([]UserRatingDTO{
+					{
+						RatingScopeDTO: RatingScopeDTO{
+							Mode:             "classic",
+							BoardSize:        8,
+							TimeLimitMs:      600000,
+							TimeLimitMinutes: 10,
+						},
+						Rating:      1234,
+						GamesPlayed: 5,
+					},
+				}, nil)
+			},
+			expectedStatus: http.StatusOK,
+			assertBody: func(t *testing.T, body []byte) {
+				var resp map[string][]UserRatingDTO
+				err := json.Unmarshal(body, &resp)
+				if err != nil {
+					t.Fatalf("Failed to parse response: %v", err)
+				}
+
+				assert.Len(t, resp["ratings"], 1)
+				assert.Equal(t, 1234, resp["ratings"][0].Rating)
+				assert.Equal(t, 8, resp["ratings"][0].BoardSize)
+				assert.Equal(t, 10, resp["ratings"][0].TimeLimitMinutes)
+			},
+		},
+		{
+			name:       "Missing Authorization Header",
+			authHeader: "",
+			setupMock: func(mockService *MockService) {
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Invalid Token",
+			authHeader: "Bearer invalid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUserRatings", "invalid-token").Return(nil, ErrUnauthorized)
+			},
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "Database Error",
+			authHeader: "Bearer valid-token",
+			setupMock: func(mockService *MockService) {
+				mockService.On("GetCurrentUserRatings", "valid-token").Return(nil, ErrDatabase)
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(MockService)
+			tt.setupMock(mockService)
+
+			handler := NewHandler(mockService)
+			router := gin.Default()
+			handler.SetupRoutes(router)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("GET", "/api/me/ratings", nil)
+			if tt.authHeader != "" {
+				req.Header.Set("Authorization", tt.authHeader)
+			}
+
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+			if tt.assertBody != nil {
+				tt.assertBody(t, w.Body.Bytes())
+			}
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandler_Leaderboard_Success(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockService := new(MockService)
+	handler := NewHandler(mockService)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	scope := RatingScope{
+		Mode:        "classic",
+		BoardSize:   10,
+		TimeLimitMs: 300000,
+	}
+	mockService.On("GetLeaderboard", scope, 25).Return(&LeaderboardDTO{
+		Scope: ratingScopeDTO(scope),
+		Players: []LeaderboardEntryDTO{
+			{
+				Rank:        1,
+				UserID:      "550e8400-e29b-41d4-a716-446655440000",
+				Username:    "leader",
+				Rating:      1400,
+				GamesPlayed: 8,
+			},
+		},
+	}, nil)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/leaderboard?mode=classic&board_size=10&time_limit=5&limit=25", nil)
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp LeaderboardDTO
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	assert.NoError(t, err)
+	assert.Equal(t, 10, resp.Scope.BoardSize)
+	assert.Equal(t, 5, resp.Scope.TimeLimitMinutes)
+	assert.Len(t, resp.Players, 1)
+	assert.Equal(t, "leader", resp.Players[0].Username)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandler_Leaderboard_InvalidScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockService := new(MockService)
+	handler := NewHandler(mockService)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/leaderboard?mode=classic&board_size=9&time_limit=5", nil)
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandler_Leaderboard_DatabaseError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockService := new(MockService)
+	handler := NewHandler(mockService)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	scope := RatingScope{
+		Mode:        "classic",
+		BoardSize:   8,
+		TimeLimitMs: 600000,
+	}
+	mockService.On("GetLeaderboard", scope, 50).Return(nil, ErrDatabase)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/leaderboard", nil)
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	mockService.AssertExpectations(t)
 }
 
 func TestBearerTokenFromHeader(t *testing.T) {

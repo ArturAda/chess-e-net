@@ -46,6 +46,93 @@ func TestEnPassant(t *testing.T) {
 	assert.Equal(t, core.Black, lastRecord.Captured.Color)
 }
 
+func TestSetupSupportsModernBoardSizes(t *testing.T) {
+	tests := []struct {
+		name         string
+		size         int
+		expectedRank []string
+	}{
+		{
+			name:         "classic 8x8",
+			size:         8,
+			expectedRank: []string{"rook", "knight", "bishop", "queen", "king", "bishop", "knight", "rook"},
+		},
+		{
+			name:         "modern 10x10",
+			size:         10,
+			expectedRank: []string{"rook", "knight", "knight", "bishop", "queen", "king", "bishop", "knight", "knight", "rook"},
+		},
+		{
+			name:         "modern 12x12",
+			size:         12,
+			expectedRank: []string{"rook", "knight", "bishop", "bishop", "knight", "queen", "king", "knight", "bishop", "bishop", "knight", "rook"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			board := NewMode(tt.size).Setup()
+
+			assert.Equal(t, tt.size, board.Width)
+			assert.Equal(t, tt.size, board.Height)
+
+			for x, expectedType := range tt.expectedRank {
+				whiteBackRank := board.Grid[core.Pos{X: x, Y: 0}]
+				blackBackRank := board.Grid[core.Pos{X: x, Y: tt.size - 1}]
+				whitePawn := board.Grid[core.Pos{X: x, Y: 1}]
+				blackPawn := board.Grid[core.Pos{X: x, Y: tt.size - 2}]
+
+				assert.Equal(t, expectedType, whiteBackRank.Type)
+				assert.Equal(t, core.White, whiteBackRank.Color)
+				assert.Equal(t, expectedType, blackBackRank.Type)
+				assert.Equal(t, core.Black, blackBackRank.Color)
+				assert.Equal(t, "pawn", whitePawn.Type)
+				assert.Equal(t, core.White, whitePawn.Color)
+				assert.Equal(t, "pawn", blackPawn.Type)
+				assert.Equal(t, core.Black, blackPawn.Color)
+			}
+		})
+	}
+}
+
+func TestModernPawnRulesUseBoardHeight(t *testing.T) {
+	mode := NewMode(10)
+	board := mode.Setup()
+
+	err := mode.ValidateMove(board, core.Black, core.Pos{X: 0, Y: 8}, core.Pos{X: 0, Y: 6})
+	assert.NoError(t, err)
+
+	board = core.NewBoard(10, 10)
+	board.Grid[core.Pos{X: 0, Y: 8}] = core.Piece{Type: "pawn", Color: core.White, Meta: make(map[string]any)}
+
+	mode.ApplyMoveSideEffects(board, core.Pos{X: 0, Y: 8}, core.Pos{X: 0, Y: 9})
+
+	promoted := board.Grid[core.Pos{X: 0, Y: 9}]
+	assert.Equal(t, "queen", promoted.Type)
+	assert.Equal(t, core.White, promoted.Color)
+}
+
+func TestModernCastlingUsesBoardWidth(t *testing.T) {
+	mode := NewMode(10)
+	board := core.NewBoard(10, 10)
+	board.Grid[core.Pos{X: 5, Y: 0}] = core.Piece{Type: "king", Color: core.White, Meta: make(map[string]any)}
+	board.Grid[core.Pos{X: 9, Y: 0}] = core.Piece{Type: "rook", Color: core.White, Meta: make(map[string]any)}
+
+	err := mode.ValidateMove(board, core.White, core.Pos{X: 5, Y: 0}, core.Pos{X: 7, Y: 0})
+	assert.NoError(t, err)
+
+	mode.ApplyMoveSideEffects(board, core.Pos{X: 5, Y: 0}, core.Pos{X: 7, Y: 0})
+
+	king := board.Grid[core.Pos{X: 7, Y: 0}]
+	rook := board.Grid[core.Pos{X: 6, Y: 0}]
+	assert.Equal(t, "king", king.Type)
+	assert.Equal(t, "rook", rook.Type)
+	_, oldKingExists := board.Grid[core.Pos{X: 5, Y: 0}]
+	_, oldRookExists := board.Grid[core.Pos{X: 9, Y: 0}]
+	assert.False(t, oldKingExists)
+	assert.False(t, oldRookExists)
+}
+
 func TestLongGamePlaythrough_WithStateValidation(t *testing.T) {
 	s := setupTestSession()
 
