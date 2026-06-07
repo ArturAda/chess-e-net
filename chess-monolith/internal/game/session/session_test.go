@@ -13,10 +13,10 @@ import (
 // MockMode реализует упрощенные правила для теста
 type MockMode struct{}
 
-func (m *MockMode) Setup() *core.Board                                            { return core.NewBoard(8, 8) }
-func (m *MockMode) ValidateMove(_ *core.Board, _ core.Color, _, _ core.Pos) error { return nil }
-func (m *MockMode) ApplyMoveSideEffects(_ *core.Board, _, _ core.Pos)             {}
-func (m *MockMode) CheckState(_ *core.Board, _ core.Color) string                 { return "active" }
+func (m *MockMode) Setup() *core.Board                                                    { return core.NewBoard(8, 8) }
+func (m *MockMode) ValidateMove(_ *core.Board, _ core.Color, _, _ core.Pos) error         { return nil }
+func (m *MockMode) ApplyMoveSideEffects(_ *core.Board, _, _ core.Pos, _ core.MoveOptions) {}
+func (m *MockMode) CheckState(_ *core.Board, _ core.Color) string                         { return "active" }
 
 func TestGameSession_TurnRotation(t *testing.T) {
 	reg := core.NewRegistry()

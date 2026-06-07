@@ -9,6 +9,26 @@ const TIMER_ROOT = `${ASSET_ROOT}/timer`;
 const TIMER_DIGIT_ROOT = `${TIMER_ROOT}/digits`;
 const CUSTOM_DRAG_START_THRESHOLD = 5;
 const CUSTOM_DRAG_CLICK_SUPPRESS_MS = 250;
+const GAME_GENERIC_ERROR_MESSAGE = 'Something went wrong. Try again.';
+const GAME_CONNECTION_LOST_MESSAGE = 'Game connection was lost. Start search again.';
+const GAME_SETUP_PENDING_MESSAGE = 'The board is still setting up.';
+const GAME_TECHNICAL_MESSAGE_PATTERN = /\b(backend|websocket|jwt|localhost|authorization bearer|token|payload|json|queue manager|request failed|frontend|server error|message type|board_size)\b/i;
+const SOCKET_ERROR_MESSAGES = {
+    SOCKET_ERROR: 'Could not enter the match room. Try again.',
+    INVALID_SERVER_MESSAGE: 'The match room sent an unexpected update. Refresh the page if this repeats.',
+    INVALID_MESSAGE: 'The game did not understand that action. Try again.',
+    UNKNOWN_MESSAGE: 'This game action is not supported yet.',
+    UNKNOWN_MODE: 'This board mode is not available right now.',
+    QUEUE_FAILED: 'Matchmaking is unavailable right now. Try again soon.',
+    NOT_IN_GAME: 'This game is no longer active.',
+    NOT_YOUR_TURN: 'Wait for your turn.',
+    INVALID_MOVE: 'That move is not legal.',
+    GAME_ALREADY_OVER: 'This game is already finished.',
+    DRAW_OFFER_ACTIVE: 'A draw offer is already active.',
+    DRAW_OFFER_STATE: 'This draw offer is no longer available.',
+    INVALID_STICKER: 'This sticker is not available.',
+    INTERNAL_ERROR: 'The match room is busy right now. Try again soon.'
+};
 
 const PIECE_TYPES = ['P', 'R', 'N', 'B', 'Q', 'K'];
 const PIECE_NAMES = {
@@ -27,6 +47,26 @@ const PIECE_LABELS = [
     { code: 'Q', title: 'Queen' },
     { code: 'K', title: 'King' }
 ];
+
+function playerFacingGameMessage(message, fallback = GAME_GENERIC_ERROR_MESSAGE) {
+    const text = String(message || '').trim();
+    if (!text || GAME_TECHNICAL_MESSAGE_PATTERN.test(text)) {
+        return fallback;
+    }
+    return text;
+}
+
+function playerFacingErrorMessage(error, fallback = GAME_GENERIC_ERROR_MESSAGE) {
+    return playerFacingGameMessage(error?.message, fallback);
+}
+
+function playerFacingSocketMessage(payload, fallback = GAME_GENERIC_ERROR_MESSAGE) {
+    const code = payload?.code || '';
+    if (SOCKET_ERROR_MESSAGES[code]) {
+        return SOCKET_ERROR_MESSAGES[code];
+    }
+    return playerFacingGameMessage(payload?.message, fallback);
+}
 
 class PieceAssetStrategy {
     constructor({ id, name, pieceType = null }) {
@@ -145,30 +185,32 @@ class MatchmakingStrategy {
 }
 
 class WebSocketMatchmakingStrategy extends MatchmakingStrategy {
-    async findMatch({ mode, boardSize, timeControlMinutes }) {
+    async findMatch({ mode, boardSize, timeControlMinutes, isRanked = false }) {
         const token = window.ChessApi?.getToken?.();
         if (!token) {
             throw new Error('Log in before searching for a match.');
         }
 
         if (!window.ChessSocket) {
-            throw new Error('WebSocket client is not loaded.');
+            throw new Error('Game connection is still loading. Refresh the page and try again.');
         }
 
         await ChessSocket.connect(token);
         ChessSocket.joinQueue({
             mode,
             boardSize,
-            isRanked: false,
-            timeControlMinutes
+            isRanked,
+            timeControlMinutes,
+            visualState: buildCurrentVisualStatePayload()
         });
 
         return {
             mode,
             boardSize,
             timeControlMinutes,
+            isRanked,
             status: 'waiting',
-            message: `Searching for ${modeLabel(mode, boardSize)} · ${timeControlMinutes} min.`
+            message: `Searching for ${modeLabel(mode, boardSize)} · ${timeControlMinutes} min · ${isRanked ? 'ranked' : 'casual'}.`
         };
     }
 
@@ -332,8 +374,10 @@ let customDragState = null;
 let customDragSuppressClickUntil = 0;
 let selectedClassicBoardSize = null;
 let selectedClassicTimeMinutes = null;
+let selectedClassicIsRanked = false;
 let selectedModernBoardSize = null;
 let selectedModernTimeMinutes = null;
+let selectedModernIsRanked = false;
 let capturedByMe = [];
 let capturedByOpponent = [];
 let activeMatchRequest = null;
@@ -342,10 +386,23 @@ let activeRemoteGame = false;
 let currentGameState = null;
 let currentPlayerColor = null;
 let currentGameId = null;
+let currentIsRanked = false;
 let currentValidMoves = {};
 let pendingClassicMove = null;
+let pendingPromotionMove = null;
 let classicSnapbackInProgress = false;
 let queuedClassicPositionUpdate = null;
+let activeDrawOffer = null;
+let drawOfferIntervalId = null;
+let networkWarning = null;
+let networkWarningIntervalId = null;
+let ratingsState = {
+    boardSize: 8,
+    timeControlMinutes: 10,
+    loading: false,
+    error: '',
+    leaderboard: null
+};
 let historySortDirection = 'desc';
 let historyFilters = new Set();
 let historyLoaded = false;
@@ -372,6 +429,8 @@ document.addEventListener('DOMContentLoaded', () => {
     bindClassicSetupControls();
     bindModernSetupControls();
     bindHistoryControls();
+    bindGameActionControls();
+    bindRatingControls();
     bindSocketEvents();
     bindAccountForm();
     renderAccountProfile();
@@ -393,7 +452,7 @@ window.addEventListener('resize', () => {
     }
     if (historyReplayBoard) {
         historyReplayBoard.resize();
-        paintRenderedClassicSquares('#history-replay-board');
+        paintRenderedClassicSquares('#history-replay-board', historyReplayState?.record?.visualState);
     }
 });
 
@@ -429,6 +488,10 @@ function navigateTo(pageId) {
 
     if (pageId === 'page-history') {
         loadHistoryList({ force: true });
+    }
+
+    if (pageId === 'page-rating') {
+        loadRatingPage({ force: true });
     }
 
     if (pageId === 'page-settings') {
@@ -575,10 +638,28 @@ function modeForBoardSize(boardSize) {
 }
 
 function modeLabel(mode, boardSize = null) {
-    if (mode === 'classic') return 'classic 8×8';
+    if (mode === 'classic') return boardSize && boardSize !== 8 ? `classic ${boardSize}×${boardSize}` : 'classic 8×8';
     if (mode === 'modern10') return 'modern 10×10';
     if (mode === 'modern12') return 'modern 12×12';
     return boardSize ? `${mode} ${boardSize}×${boardSize}` : mode;
+}
+
+function ratingApiMode() {
+    return 'classic';
+}
+
+function buildCurrentVisualStatePayload() {
+    return {
+        version: 1,
+        light_square: { id: settings.lightSquareStrategyId },
+        dark_square: { id: settings.darkSquareStrategyId },
+        pieces: {
+            light: { ...settings.lightPieceStrategyByType },
+            dark: { ...settings.darkPieceStrategyByType }
+        },
+        background: { id: settings.backgroundStrategyId },
+        falling_pieces_enabled: Boolean(settings.fallingPiecesEnabled)
+    };
 }
 
 async function ensureMatchAuthentication() {
@@ -608,10 +689,17 @@ function bindClassicSetupControls() {
         });
     });
 
+    document.querySelectorAll('[data-classic-ranked]').forEach(button => {
+        button.addEventListener('click', () => {
+            selectedClassicIsRanked = button.dataset.classicRanked === 'true';
+            renderClassicSetupSelection();
+        });
+    });
+
     document.getElementById('classic-start-btn')?.addEventListener('click', async () => {
         if (!selectedClassicTimeMinutes) return;
         if (!await ensureMatchAuthentication()) return;
-        renderClassicBoard(8, selectedClassicTimeMinutes, true, true, 'classic');
+        renderClassicBoard(8, selectedClassicTimeMinutes, true, true, 'classic', selectedClassicIsRanked);
     });
 }
 
@@ -630,19 +718,31 @@ function bindModernSetupControls() {
         });
     });
 
+    document.querySelectorAll('[data-modern-ranked]').forEach(button => {
+        button.addEventListener('click', () => {
+            selectedModernIsRanked = button.dataset.modernRanked === 'true';
+            renderModernSetupSelection();
+        });
+    });
+
     document.getElementById('modern-start-btn')?.addEventListener('click', async () => {
         if (!selectedModernBoardSize || !selectedModernTimeMinutes) return;
         if (!await ensureMatchAuthentication()) return;
         const boardSize = selectedModernBoardSize;
         const timeControl = selectedModernTimeMinutes;
+        const isRanked = selectedModernIsRanked;
         navigateTo('page-classic');
-        renderClassicBoard(boardSize, timeControl, true, true, modeForBoardSize(boardSize));
+        renderClassicBoard(boardSize, timeControl, true, true, modeForBoardSize(boardSize), isRanked);
     });
 }
 
 function renderClassicSetupSelection() {
     document.querySelectorAll('[data-time-control]').forEach(button => {
         button.classList.toggle('active', Number(button.dataset.timeControl) === selectedClassicTimeMinutes);
+    });
+
+    document.querySelectorAll('[data-classic-ranked]').forEach(button => {
+        button.classList.toggle('active', (button.dataset.classicRanked === 'true') === selectedClassicIsRanked);
     });
 
     const startButton = document.getElementById('classic-start-btn');
@@ -660,19 +760,178 @@ function renderModernSetupSelection() {
         button.classList.toggle('active', Number(button.dataset.modernTimeControl) === selectedModernTimeMinutes);
     });
 
+    document.querySelectorAll('[data-modern-ranked]').forEach(button => {
+        button.classList.toggle('active', (button.dataset.modernRanked === 'true') === selectedModernIsRanked);
+    });
+
     const startButton = document.getElementById('modern-start-btn');
     if (startButton) {
         startButton.disabled = !selectedModernBoardSize || !selectedModernTimeMinutes;
     }
 }
 
+function bindRatingControls() {
+    document.querySelectorAll('[data-rating-board-size]').forEach(button => {
+        button.addEventListener('click', () => {
+            const boardSize = Number(button.dataset.ratingBoardSize);
+            if (!boardSize || ratingsState.boardSize === boardSize) return;
+            ratingsState.boardSize = boardSize;
+            loadRatingPage({ force: true });
+        });
+    });
+
+    document.querySelectorAll('[data-rating-time-control]').forEach(button => {
+        button.addEventListener('click', () => {
+            const minutes = Number(button.dataset.ratingTimeControl);
+            if (!minutes || ratingsState.timeControlMinutes === minutes) return;
+            ratingsState.timeControlMinutes = minutes;
+            loadRatingPage({ force: true });
+        });
+    });
+
+    document.getElementById('rating-refresh-btn')?.addEventListener('click', () => {
+        loadRatingPage({ force: true });
+    });
+
+    renderRatingPage();
+}
+
+function resetRatingState() {
+    ratingsState = {
+        boardSize: 8,
+        timeControlMinutes: 10,
+        loading: false,
+        error: '',
+        leaderboard: null
+    };
+    renderRatingPage();
+}
+
+async function loadRatingPage({ force = false } = {}) {
+    if (ratingsState.loading) {
+        renderRatingPage();
+        return;
+    }
+
+    if (ratingsState.leaderboard && !force) {
+        renderRatingPage();
+        return;
+    }
+
+    ratingsState.loading = true;
+    ratingsState.error = '';
+    renderRatingPage();
+
+    try {
+        ratingsState.leaderboard = await ChessApi.leaderboard({
+            mode: ratingApiMode(ratingsState.boardSize),
+            boardSize: ratingsState.boardSize,
+            timeLimitMinutes: ratingsState.timeControlMinutes,
+            limit: 50
+        });
+    } catch (error) {
+        ratingsState.leaderboard = null;
+        ratingsState.error = window.ChessApi?.getErrorMessage?.(error) || playerFacingErrorMessage(error, 'Could not load the leaderboard.');
+    } finally {
+        ratingsState.loading = false;
+        renderRatingPage();
+    }
+}
+
+function renderRatingPage() {
+    document.querySelectorAll('[data-rating-board-size]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.ratingBoardSize) === ratingsState.boardSize);
+    });
+    document.querySelectorAll('[data-rating-time-control]').forEach(button => {
+        button.classList.toggle('active', Number(button.dataset.ratingTimeControl) === ratingsState.timeControlMinutes);
+    });
+
+    const scopeLabel = document.getElementById('rating-scope-label');
+    if (scopeLabel) {
+        scopeLabel.textContent = `${modeLabel(ratingApiMode(ratingsState.boardSize), ratingsState.boardSize)} · ${ratingsState.timeControlMinutes} min`;
+    }
+
+    const list = document.getElementById('rating-leaderboard');
+    if (!list) return;
+
+    list.innerHTML = '';
+    if (ratingsState.loading) {
+        renderRatingStateMessage(list, 'Loading leaderboard...');
+        return;
+    }
+
+    if (ratingsState.error) {
+        renderRatingStateMessage(list, ratingsState.error);
+        return;
+    }
+
+    const players = Array.isArray(ratingsState.leaderboard?.players) ? ratingsState.leaderboard.players : [];
+    if (players.length === 0) {
+        renderRatingStateMessage(list, 'No ranked games in this category yet.');
+        return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'rating-row rating-row-header';
+    header.append(
+        createTextSpan('Rank'),
+        createTextSpan('Player'),
+        createTextSpan('Rating'),
+        createTextSpan('Games')
+    );
+    list.appendChild(header);
+
+    players.forEach(player => {
+        const row = document.createElement('div');
+        row.className = 'rating-row';
+
+        const username = player.username || 'Player';
+        const isMe = accountProfile.id && player.user_id === accountProfile.id;
+        row.append(
+            createTextSpan(`#${player.rank || '-'}`),
+            createTextStrong(isMe ? `${username} (you)` : username),
+            createTextStrong(String(player.rating ?? '-')),
+            createTextSpan(String(player.games_played ?? 0))
+        );
+        list.appendChild(row);
+    });
+}
+
+function renderRatingStateMessage(list, message) {
+    const empty = document.createElement('div');
+    empty.className = 'history-empty';
+    empty.textContent = message;
+    list.appendChild(empty);
+}
+
+function createTextSpan(text) {
+    const span = document.createElement('span');
+    span.textContent = text;
+    return span;
+}
+
+function createTextStrong(text) {
+    const strong = document.createElement('strong');
+    strong.textContent = text;
+    return strong;
+}
+
 function resetModernSetup() {
     selectedModernBoardSize = null;
     selectedModernTimeMinutes = null;
+    selectedModernIsRanked = false;
     renderModernSetupSelection();
 }
 
 function resetClassicEntry() {
+    if (activeRemoteGame && currentGameState?.status === 'active' && window.ChessSocket?.isOpen?.()) {
+        try {
+            ChessSocket.leaveGame?.();
+        } catch (error) {
+            console.warn('Unable to notify backend about leaving game', error);
+        }
+    }
+
     destroyBoard();
     cancelMatchmaking();
     stopGameTimer();
@@ -684,17 +943,23 @@ function resetClassicEntry() {
     selectedCustomSquare = null;
     selectedClassicBoardSize = 8;
     selectedClassicTimeMinutes = null;
+    selectedClassicIsRanked = false;
     activeMatchRequest = null;
     queuedForMatch = false;
     activeRemoteGame = false;
     currentGameState = null;
     currentPlayerColor = null;
     currentGameId = null;
+    currentIsRanked = false;
     currentValidMoves = {};
     pendingClassicMove = null;
+    pendingPromotionMove = null;
     classicSnapbackInProgress = false;
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
+    hidePromotionPicker();
+    resetDrawOfferState();
+    resetNetworkWarning();
     capturedByMe = [];
     capturedByOpponent = [];
     emojiMessages = [];
@@ -714,12 +979,13 @@ function resetClassicEntry() {
     }
 }
 
-function renderClassicBoard(size, timeControlMinutes, resetPosition = false, restartSession = true, mode = currentGameMode) {
+function renderClassicBoard(size, timeControlMinutes, resetPosition = false, restartSession = true, mode = currentGameMode, isRanked = currentIsRanked) {
     const preservedClassicPosition = !resetPosition && size === 8 && board ? board.position() : null;
     destroyBoard();
     currentVisualBoardSize = size;
     currentTimeControlMinutes = timeControlMinutes;
     currentGameMode = mode;
+    currentIsRanked = Boolean(isRanked);
 
     if (restartSession) {
         stopGameTimer();
@@ -729,7 +995,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
         capturedByOpponent = [];
         renderCapturedPieces();
         renderPieceLegend();
-        startMatchmaking(size, timeControlMinutes, mode);
+        startMatchmaking(size, timeControlMinutes, mode, currentIsRanked);
         startGameTimer(timeControlMinutes);
     }
 
@@ -737,7 +1003,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
     document.getElementById('classic-board-shell')?.classList.remove('hidden');
     const label = document.getElementById('classic-board-size-label');
     if (label) {
-        label.textContent = `${size}×${size} · ${timeControlMinutes} min`;
+        label.textContent = `${size}×${size} · ${timeControlMinutes} min · ${currentIsRanked ? 'ranked' : 'casual'}`;
     }
 
     const host = document.getElementById('myBoard');
@@ -784,21 +1050,26 @@ function destroyBoard() {
     }
 }
 
-function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode) {
+function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode, isRanked = currentIsRanked) {
     setMatchmakingStatus('Searching...');
-    activeMatchRequest = { mode, boardSize, timeControlMinutes };
+    activeMatchRequest = { mode, boardSize, timeControlMinutes, isRanked: Boolean(isRanked) };
+    currentIsRanked = Boolean(isRanked);
     queuedForMatch = false;
     activeRemoteGame = false;
     currentGameState = null;
     currentPlayerColor = null;
     currentGameId = null;
+    pendingPromotionMove = null;
     currentValidMoves = {};
     pendingClassicMove = null;
     classicSnapbackInProgress = false;
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
+    hidePromotionPicker();
+    resetDrawOfferState();
+    resetNetworkWarning();
 
-    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes })
+    matchmakingClient.findMatch({ mode, boardSize, timeControlMinutes, isRanked })
         .then(result => {
             if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
             setMatchmakingStatus(result.message);
@@ -808,11 +1079,15 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode)
             activeMatchRequest = null;
             queuedForMatch = false;
             pendingClassicMove = null;
+            pendingPromotionMove = null;
             classicSnapbackInProgress = false;
             queuedClassicPositionUpdate = null;
             clearClassicMoveHighlights();
+            hidePromotionPicker();
+            resetDrawOfferState();
+            resetNetworkWarning();
             stopGameTimer();
-            setMatchmakingStatus(error.message || 'Unable to start matchmaking.');
+            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not start matchmaking. Try again.'));
         });
 }
 
@@ -823,15 +1098,20 @@ function cancelMatchmaking() {
     queuedForMatch = false;
     activeMatchRequest = null;
     pendingClassicMove = null;
+    pendingPromotionMove = null;
     classicSnapbackInProgress = false;
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
+    hidePromotionPicker();
+    resetDrawOfferState();
+    resetNetworkWarning();
 }
 
-function isCurrentMatchRequest(mode, boardSize, timeControlMinutes) {
+function isCurrentMatchRequest(mode, boardSize, timeControlMinutes, isRanked = activeMatchRequest?.isRanked) {
     return activeMatchRequest?.mode === mode
         && activeMatchRequest?.boardSize === boardSize
-        && activeMatchRequest?.timeControlMinutes === timeControlMinutes;
+        && activeMatchRequest?.timeControlMinutes === timeControlMinutes
+        && activeMatchRequest?.isRanked === Boolean(isRanked);
 }
 
 function bindSocketEvents() {
@@ -843,6 +1123,13 @@ function bindSocketEvents() {
     ChessSocket.on('ERROR', handleSocketProtocolError);
     ChessSocket.on('MOVE_REJECTED', handleMoveRejected);
     ChessSocket.on('CLOSE', handleSocketClose);
+    ChessSocket.on('DRAW_OFFER', handleDrawOfferMessage);
+    ChessSocket.on('DRAW_ACCEPTED', handleDrawAcceptedMessage);
+    ChessSocket.on('DRAW_DECLINE', handleDrawDeclinedMessage);
+    ChessSocket.on('DRAW_EXPIRED', handleDrawExpiredMessage);
+    ChessSocket.on('CHAT_STICKER', handleChatStickerMessage);
+    ChessSocket.on('PLAYER_NETWORK_WAITING', handlePlayerNetworkWaiting);
+    ChessSocket.on('PLAYER_NETWORK_RESTORED', handlePlayerNetworkRestored);
 }
 
 function handleQueueJoined(payload) {
@@ -850,7 +1137,8 @@ function handleQueueJoined(payload) {
     const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
     const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
     const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes;
-    setMatchmakingStatus(`Searching for ${modeLabel(mode, boardSize)} · ${minutes} min.`);
+    currentIsRanked = Boolean(payload?.is_ranked ?? activeMatchRequest?.isRanked ?? currentIsRanked);
+    setMatchmakingStatus(`Searching for ${modeLabel(mode, boardSize)} · ${minutes} min · ${currentIsRanked ? 'ranked' : 'casual'}.`);
 }
 
 function handleMatchFound(payload) {
@@ -861,23 +1149,28 @@ function handleMatchFound(payload) {
     currentPlayerColor = payload?.player_color || null;
     currentValidMoves = {};
     pendingClassicMove = null;
+    pendingPromotionMove = null;
     classicSnapbackInProgress = false;
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
+    hidePromotionPicker();
+    resetDrawOfferState();
+    resetNetworkWarning();
 
     const boardSize = payload?.board_size || activeMatchRequest?.boardSize || currentVisualBoardSize || 8;
     const minutes = payload?.time_limit_minutes || activeMatchRequest?.timeControlMinutes || currentTimeControlMinutes || 10;
     const mode = payload?.mode || activeMatchRequest?.mode || currentGameMode;
+    currentIsRanked = Boolean(payload?.is_ranked ?? activeMatchRequest?.isRanked ?? currentIsRanked);
 
     if (currentVisualBoardSize !== boardSize || currentGameMode !== mode) {
-        renderClassicBoard(boardSize, minutes, true, false, mode);
+        renderClassicBoard(boardSize, minutes, true, false, mode, currentIsRanked);
     }
 
     syncRenderedBoardOrientation(boardSize);
 
     const colorLabel = currentPlayerColor || 'unknown color';
     const opponent = payload?.opponent?.username || 'opponent';
-    setMatchmakingStatus(`Match found vs ${opponent}. You play ${colorLabel}.`);
+    setMatchmakingStatus(`Match found vs ${opponent}. You play ${colorLabel}. ${currentIsRanked ? 'Ranked' : 'Casual'} game.`);
 }
 
 function handleGameState(gameState) {
@@ -893,6 +1186,7 @@ function handleGameState(gameState) {
     currentPlayerColor = gameState.player_color || currentPlayerColor;
     currentValidMoves = normalizeValidMoves(gameState.valid_moves);
     clearClassicMoveHighlights();
+    clearCustomMoveHighlights();
 
     const mode = activeMatchRequest?.mode || currentGameMode || modeForBoardSize(boardSize);
     const minutes = currentTimeControlMinutes || Math.max(
@@ -905,10 +1199,20 @@ function handleGameState(gameState) {
     syncRenderedBoardOrientation(boardSize);
     applyPositionFromGameState(gameState, boardSize, animateConfirmedClassicMove);
     pendingClassicMove = null;
+    pendingPromotionMove = null;
+    hidePromotionPicker();
     applyCapturedPiecesFromGameState(gameState);
     startServerGameTimer(gameState);
 
     const status = gameState.status || 'active';
+    if (status !== 'active') {
+        resetDrawOfferState();
+        resetNetworkWarning();
+    } else {
+        renderDrawOfferControls();
+        renderNetworkWarning();
+    }
+
     const turnLabel = status === 'active'
         ? (gameState.turn === currentPlayerColor ? 'Your turn' : 'Opponent turn')
         : 'Game finished';
@@ -916,7 +1220,7 @@ function handleGameState(gameState) {
 }
 
 function handleSocketProtocolError(payload) {
-    const message = payload?.message || 'WebSocket error.';
+    const message = playerFacingSocketMessage(payload, 'Something went wrong in the match room. Try again.');
     setMatchmakingStatus(message);
 
     if (payload?.code === 'UNKNOWN_MODE') {
@@ -925,18 +1229,26 @@ function handleSocketProtocolError(payload) {
         currentGameState = null;
         currentValidMoves = {};
         pendingClassicMove = null;
+        pendingPromotionMove = null;
         classicSnapbackInProgress = false;
         queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
+        clearCustomMoveHighlights();
+        hidePromotionPicker();
+        resetDrawOfferState();
+        resetNetworkWarning();
         stopGameTimer();
     }
 }
 
 function handleMoveRejected(payload) {
     pendingClassicMove = null;
+    pendingPromotionMove = null;
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
-    setMatchmakingStatus(payload?.message || 'Move rejected.');
+    clearCustomMoveHighlights();
+    hidePromotionPicker();
+    setMatchmakingStatus(playerFacingSocketMessage(payload, 'That move is not legal.'));
 }
 
 function handleSocketClose() {
@@ -944,12 +1256,268 @@ function handleSocketClose() {
         queuedForMatch = false;
         activeMatchRequest = null;
         pendingClassicMove = null;
+        pendingPromotionMove = null;
         classicSnapbackInProgress = false;
         queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
+        hidePromotionPicker();
         stopGameTimer();
-        setMatchmakingStatus('Connection closed while searching.');
+        setMatchmakingStatus('Search stopped because the game connection closed. Try again.');
     }
+}
+
+function bindGameActionControls() {
+    document.getElementById('draw-offer-btn')?.addEventListener('click', () => {
+        if (!canUseGameAction()) return;
+        if (activeDrawOffer) {
+            setMatchmakingStatus('Draw offer is already active.');
+            return;
+        }
+
+        try {
+            ChessSocket.offerDraw();
+            setMatchmakingStatus('Draw offer sent.');
+        } catch (error) {
+            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not offer a draw.'));
+        }
+    });
+
+    document.getElementById('draw-accept-btn')?.addEventListener('click', () => {
+        if (!canRespondToDrawOffer()) return;
+        try {
+            ChessSocket.acceptDraw();
+            setMatchmakingStatus('Draw accepted.');
+        } catch (error) {
+            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not accept the draw.'));
+        }
+    });
+
+    document.getElementById('draw-decline-btn')?.addEventListener('click', () => {
+        if (!canRespondToDrawOffer()) return;
+        try {
+            ChessSocket.declineDraw();
+            setMatchmakingStatus('Draw declined.');
+        } catch (error) {
+            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not decline the draw.'));
+        }
+    });
+
+    renderDrawOfferControls();
+    renderNetworkWarning();
+}
+
+function canUseGameAction() {
+    if (!activeRemoteGame || currentGameState?.status !== 'active') {
+        setMatchmakingStatus('Game is not active.');
+        return false;
+    }
+
+    if (!window.ChessSocket?.isOpen?.()) {
+        setMatchmakingStatus(GAME_CONNECTION_LOST_MESSAGE);
+        return false;
+    }
+
+    return true;
+}
+
+function canRespondToDrawOffer() {
+    if (!canUseGameAction()) return false;
+    if (!activeDrawOffer) {
+        setMatchmakingStatus('No active draw offer.');
+        return false;
+    }
+    if (isOwnDrawOffer(activeDrawOffer)) {
+        setMatchmakingStatus('Opponent must respond to your draw offer.');
+        return false;
+    }
+    return true;
+}
+
+function handleDrawOfferMessage(payload = {}) {
+    activeDrawOffer = normalizeDrawOffer(payload);
+    const message = payload.message || (isOwnDrawOffer(activeDrawOffer) ? 'You offered a draw.' : 'Opponent offered a draw.');
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    startDrawOfferCountdown();
+    renderDrawOfferControls();
+}
+
+function handleDrawAcceptedMessage(payload = {}) {
+    const message = payload.message || 'Draw offer accepted. Game finished as draw.';
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    resetDrawOfferState();
+}
+
+function handleDrawDeclinedMessage(payload = {}) {
+    const message = payload.message || 'Draw offer declined.';
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    resetDrawOfferState();
+}
+
+function handleDrawExpiredMessage(payload = {}) {
+    const message = payload.message || 'Draw offer expired.';
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    resetDrawOfferState();
+}
+
+function normalizeDrawOffer(payload = {}) {
+    const fallbackExpiresAt = payload.expires_in_ms
+        ? new Date(Date.now() + Number(payload.expires_in_ms)).toISOString()
+        : '';
+
+    return {
+        offerId: payload.offer_id || '',
+        offeredBy: payload.offered_by || '',
+        offeredByUserId: payload.offered_by_user_id || '',
+        expiresAt: payload.expires_at || fallbackExpiresAt,
+        expiresInMs: Number(payload.expires_in_ms || 0),
+        message: payload.message || ''
+    };
+}
+
+function resetDrawOfferState() {
+    activeDrawOffer = null;
+    if (drawOfferIntervalId) {
+        window.clearInterval(drawOfferIntervalId);
+        drawOfferIntervalId = null;
+    }
+    renderDrawOfferControls();
+}
+
+function startDrawOfferCountdown() {
+    if (drawOfferIntervalId) {
+        window.clearInterval(drawOfferIntervalId);
+    }
+    drawOfferIntervalId = window.setInterval(() => {
+        renderDrawOfferControls();
+        if (activeDrawOffer && drawOfferRemainingSeconds(activeDrawOffer) <= 0) {
+            resetDrawOfferState();
+        }
+    }, 500);
+}
+
+function renderDrawOfferControls() {
+    const button = document.getElementById('draw-offer-btn');
+    const panel = document.getElementById('draw-offer-panel');
+    const message = document.getElementById('draw-offer-message');
+    const countdown = document.getElementById('draw-offer-countdown');
+    const responseActions = document.getElementById('draw-response-actions');
+    const isGameActive = activeRemoteGame && currentGameState?.status === 'active';
+    const ownOffer = activeDrawOffer ? isOwnDrawOffer(activeDrawOffer) : false;
+
+    if (button) {
+        button.disabled = !isGameActive || !window.ChessSocket?.isOpen?.() || Boolean(activeDrawOffer);
+        button.textContent = activeDrawOffer && ownOffer ? 'Draw Offered' : 'Offer Draw';
+    }
+
+    if (!panel) return;
+
+    panel.classList.toggle('hidden', !activeDrawOffer);
+    if (!activeDrawOffer) return;
+
+    const seconds = drawOfferRemainingSeconds(activeDrawOffer);
+    if (message) {
+        message.textContent = activeDrawOffer.message || (ownOffer ? 'You offered a draw.' : 'Opponent offered a draw.');
+    }
+    if (countdown) {
+        countdown.textContent = seconds > 0 ? `Expires in ${seconds}s` : 'Expired';
+    }
+    responseActions?.classList.toggle('hidden', ownOffer);
+}
+
+function drawOfferRemainingSeconds(offer) {
+    if (!offer) return 0;
+    const expiresAtMs = Date.parse(offer.expiresAt || '');
+    if (Number.isFinite(expiresAtMs)) {
+        return Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+    }
+    return Math.max(0, Math.ceil(Number(offer.expiresInMs || 0) / 1000));
+}
+
+function isOwnDrawOffer(offer) {
+    return Boolean(
+        offer
+        && ((offer.offeredByUserId && accountProfile.id && offer.offeredByUserId === accountProfile.id)
+            || (offer.offeredBy && currentPlayerColor && offer.offeredBy === currentPlayerColor))
+    );
+}
+
+function handlePlayerNetworkWaiting(payload = {}) {
+    networkWarning = normalizeNetworkWarning(payload);
+    const message = playerFacingGameMessage(payload.message, 'Waiting for the other player to reconnect.');
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    startNetworkWarningCountdown();
+    renderNetworkWarning();
+}
+
+function handlePlayerNetworkRestored(payload = {}) {
+    const message = playerFacingGameMessage(payload.message, 'The other player is back online.');
+    appendSystemEmojiMessage(message);
+    setMatchmakingStatus(message);
+    resetNetworkWarning();
+}
+
+function normalizeNetworkWarning(payload = {}) {
+    const fallbackExpiresAt = payload.remaining_ms
+        ? new Date(Date.now() + Number(payload.remaining_ms)).toISOString()
+        : '';
+
+    return {
+        userId: payload.user_id || '',
+        username: payload.username || '',
+        color: payload.color || '',
+        expiresAt: payload.expires_at || fallbackExpiresAt,
+        remainingMs: Number(payload.remaining_ms || 0),
+        message: payload.message || ''
+    };
+}
+
+function resetNetworkWarning() {
+    networkWarning = null;
+    if (networkWarningIntervalId) {
+        window.clearInterval(networkWarningIntervalId);
+        networkWarningIntervalId = null;
+    }
+    renderNetworkWarning();
+}
+
+function startNetworkWarningCountdown() {
+    if (networkWarningIntervalId) {
+        window.clearInterval(networkWarningIntervalId);
+    }
+    networkWarningIntervalId = window.setInterval(() => {
+        renderNetworkWarning();
+        if (networkWarning && networkWarningRemainingSeconds(networkWarning) <= 0) {
+            resetNetworkWarning();
+        }
+    }, 500);
+}
+
+function renderNetworkWarning() {
+    const panel = document.getElementById('network-warning');
+    if (!panel) return;
+
+    panel.classList.toggle('hidden', !networkWarning);
+    if (!networkWarning) {
+        panel.textContent = '';
+        return;
+    }
+
+    const seconds = networkWarningRemainingSeconds(networkWarning);
+    const baseMessage = networkWarning.message || 'Waiting for player network to recover.';
+    panel.textContent = seconds > 0 ? `${baseMessage} ${seconds}s left.` : baseMessage;
+}
+
+function networkWarningRemainingSeconds(warning) {
+    const expiresAtMs = Date.parse(warning?.expiresAt || '');
+    if (Number.isFinite(expiresAtMs)) {
+        return Math.max(0, Math.ceil((expiresAtMs - Date.now()) / 1000));
+    }
+    return Math.max(0, Math.ceil(Number(warning?.remainingMs || 0) / 1000));
 }
 
 function boardSizeFromGameState(gameState) {
@@ -1298,12 +1866,38 @@ function resetEmojiChatSession() {
 }
 
 function sendEmojiMessage(item) {
+    if (activeRemoteGame && currentGameState?.status === 'active' && window.ChessSocket?.isOpen?.()) {
+        try {
+            ChessSocket.chatSticker(item.id);
+        } catch (error) {
+            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not send the sticker.'));
+        }
+        return;
+    }
+
     emojiMessages.push({
         id: createUserId('chat-me'),
         sender: 'me',
         name: accountProfile.signedIn && accountProfile.username ? accountProfile.username : 'Me',
         label: item.name,
         src: item.src
+    });
+    renderEmojiMessages();
+}
+
+function handleChatStickerMessage(payload = {}) {
+    const sticker = emojiChatItems.find(item => item.id === payload.sticker_id);
+    const isMine = Boolean(
+        (payload.sender_user_id && accountProfile.id && payload.sender_user_id === accountProfile.id)
+        || (payload.sender_color && currentPlayerColor && payload.sender_color === currentPlayerColor)
+    );
+
+    emojiMessages.push({
+        id: payload.message_id || createUserId('chat-sticker'),
+        sender: isMine ? 'me' : 'opponent',
+        name: payload.sender_username || (isMine ? accountProfile.username || 'Me' : 'Opponent'),
+        label: payload.label || sticker?.name || payload.sticker_id || 'Sticker',
+        src: payload.src || sticker?.src || ''
     });
     renderEmojiMessages();
 }
@@ -1376,7 +1970,7 @@ async function loadHistoryList({ force = false } = {}) {
         }
         historyRecords = [];
         historyLoaded = false;
-        historyLoadError = window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game history.';
+        historyLoadError = window.ChessApi?.getErrorMessage?.(error) || playerFacingErrorMessage(error, 'Could not load game history.');
     } finally {
         historyLoading = false;
         renderHistoryList();
@@ -1395,7 +1989,7 @@ function renderHistoryList() {
     }
 
     if (historyLoading) {
-        renderHistoryStateMessage(list, 'Loading games from backend...');
+        renderHistoryStateMessage(list, 'Loading game history...');
         return;
     }
 
@@ -1415,7 +2009,7 @@ function renderHistoryList() {
         });
 
     if (records.length === 0) {
-        const message = historyRecords.length === 0 ? 'No backend games yet.' : 'No games match selected filters.';
+        const message = historyRecords.length === 0 ? 'No games yet.' : 'No games match selected filters.';
         renderHistoryStateMessage(list, message);
         return;
     }
@@ -1430,7 +2024,7 @@ function renderHistoryList() {
 
         const board = document.createElement('span');
         board.className = 'history-card-board';
-        renderHistoryMiniBoard(board, record.boardSize);
+        renderHistoryMiniBoard(board, record);
 
         const meta = document.createElement('span');
         meta.className = 'history-card-meta';
@@ -1514,7 +2108,7 @@ async function openHistoryGame(recordId) {
             accountProfile = createEmptyAccountProfile();
             renderAccountProfile();
         }
-        renderHistoryDetailError(window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unable to load game.');
+        renderHistoryDetailError(window.ChessApi?.getErrorMessage?.(error) || playerFacingErrorMessage(error, 'Could not open this game.'));
     }
 }
 
@@ -1557,7 +2151,7 @@ function renderHistoryDetailError(message) {
     if (title) title.textContent = 'Game unavailable';
     if (format) format.textContent = '-';
     if (result) result.textContent = '-';
-    if (status) status.textContent = 'Error';
+    if (status) status.textContent = 'Unavailable';
 
     const host = document.getElementById('history-analysis-board');
     if (host) {
@@ -1572,20 +2166,40 @@ function renderHistoryDetailError(message) {
     renderHistoryMoveList({ moves: [] }, message);
 }
 
-function renderHistoryMiniBoard(host, size) {
+function renderHistoryMiniBoard(host, record) {
     host.innerHTML = '';
+    const size = clampHistoryBoardSize(record?.boardSize || 8);
+    const orientation = historyReplayOrientation(record);
+    const visualState = record?.visualState || {};
+    const position = Object.keys(backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || [])).length > 0
+        ? backendPiecesToHistoryPosition(record?.boardState?.board?.pieces || [])
+        : buildInitialHistoryPosition(size);
+
     host.dataset.size = `${size}×${size}`;
-    const lightSquare = getSquareStrategy(settings.lightSquareStrategyId);
-    const darkSquare = getSquareStrategy(settings.darkSquareStrategyId);
+    host.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+    host.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+    const lightSquare = getVisualSquareStrategy(visualState, 'light');
+    const darkSquare = getVisualSquareStrategy(visualState, 'dark');
     const fragment = document.createDocumentFragment();
 
-    for (let row = 0; row < 4; row += 1) {
-        for (let col = 0; col < 4; col += 1) {
+    for (let row = 0; row < size; row += 1) {
+        for (let col = 0; col < size; col += 1) {
+            const logicalRow = customLogicalIndex(row, size, orientation);
+            const logicalCol = customLogicalIndex(col, size, orientation);
+            const squareName = historySquareName(logicalRow, logicalCol, size);
             const square = document.createElement('span');
-            const strategy = (row + col) % 2 === 0 ? lightSquare : darkSquare;
+            const strategy = (logicalRow + logicalCol) % 2 === 0 ? lightSquare : darkSquare;
             square.className = 'history-card-square';
             square.style.backgroundImage = `url("${strategy.getSrc()}")`;
             square.style.backgroundColor = strategy.getColor();
+
+            const piece = position[squareName];
+            if (piece) {
+                const img = document.createElement('img');
+                img.src = getVisualPieceSrc(piece, visualState);
+                img.alt = '';
+                square.appendChild(img);
+            }
             fragment.appendChild(square);
         }
     }
@@ -1670,7 +2284,7 @@ function applyHistoryMove(position, move, size) {
     const movingPiece = next[from] || backendPieceToFrontendCode(move.piece);
     if (!movingPiece) return next;
 
-    const pieceAfterMove = backendPieceToFrontendCode(move.piece) || movingPiece;
+    const pieceAfterMove = frontendPromotionPiece(movingPiece, move.promotion) || backendPieceToFrontendCode(move.piece) || movingPiece;
     const fromSquare = parseHistorySquare(from);
     const toSquare = parseHistorySquare(to);
     const targetHadPiece = Boolean(next[to]);
@@ -1712,6 +2326,18 @@ function applyHistoryCastlingMove(position, movingPiece, fromSquare, toSquare, s
     if (!rook) return;
     delete position[rookFrom];
     position[rookTo] = rook;
+}
+
+function frontendPromotionPiece(movingPiece, promotion) {
+    if (!promotion || !movingPiece || movingPiece[1] !== 'P') return '';
+    const typeMap = {
+        queen: 'Q',
+        rook: 'R',
+        bishop: 'B',
+        knight: 'N'
+    };
+    const type = typeMap[promotion];
+    return type ? `${movingPiece[0]}${type}` : '';
 }
 
 function parseHistorySquare(square) {
@@ -1756,14 +2382,14 @@ function renderHistoryClassicReplayBoard(host, state, position, animate) {
             draggable: false,
             orientation: state.orientation,
             position,
-            pieceTheme
+            pieceTheme: piece => getVisualPieceSrc(piece, state.record?.visualState)
         });
     } else {
         historyReplayBoard.position(position, animate);
     }
 
-    paintRenderedClassicSquares('#history-replay-board');
-    requestAnimationFrame(() => paintRenderedClassicSquares('#history-replay-board'));
+    paintRenderedClassicSquares('#history-replay-board', state.record?.visualState);
+    requestAnimationFrame(() => paintRenderedClassicSquares('#history-replay-board', state.record?.visualState));
 }
 
 function renderHistoryCustomReplayBoard(host, state, position, previousIndex = null) {
@@ -1774,8 +2400,9 @@ function renderHistoryCustomReplayBoard(host, state, position, previousIndex = n
 
     const animation = getHistoryReplayAnimation(previousIndex, state.index);
     const size = state.size;
-    const lightSquare = getSquareStrategy(settings.lightSquareStrategyId);
-    const darkSquare = getSquareStrategy(settings.darkSquareStrategyId);
+    const visualState = state.record?.visualState || {};
+    const lightSquare = getVisualSquareStrategy(visualState, 'light');
+    const darkSquare = getVisualSquareStrategy(visualState, 'dark');
     const grid = document.createElement('div');
     grid.className = 'history-board-grid history-custom-board';
     grid.dataset.size = String(size);
@@ -1803,7 +2430,7 @@ function renderHistoryCustomReplayBoard(host, state, position, previousIndex = n
             const piece = position[key];
             if (piece) {
                 const img = document.createElement('img');
-                img.src = getPieceSrc(piece);
+                img.src = getVisualPieceSrc(piece, visualState);
                 img.alt = '';
                 square.appendChild(img);
             }
@@ -1850,7 +2477,7 @@ function animateHistoryCustomPiece(host, animation) {
         const inset = fromRect.width * 0.08;
         const clone = document.createElement('img');
         clone.className = 'history-moving-piece';
-        clone.src = getPieceSrc(animation.piece);
+        clone.src = getVisualPieceSrc(animation.piece, historyReplayState?.record?.visualState);
         clone.alt = '';
         clone.style.left = `${fromRect.left + inset}px`;
         clone.style.top = `${fromRect.top + inset}px`;
@@ -2006,6 +2633,7 @@ function normalizeHistoryGames(games = []) {
 
 function normalizeHistoryGame(game = {}) {
     const boardState = normalizeHistoryBoardState(game.board_state);
+    const visualState = normalizeHistoryVisualState(game.visual_state);
     const boardSize = clampHistoryBoardSize(game.board_size || boardState.board_size || boardState.board?.width || boardState.board?.height || 8);
     const timeLimitMs = Number(game.time_limit_ms || 0);
     const opponent = game.opponent?.username || game.opponent?.id || fallbackOpponentName(game);
@@ -2028,6 +2656,7 @@ function normalizeHistoryGame(game = {}) {
         winnerId: game.winner_id || null,
         timestamp,
         boardState,
+        visualState,
         moves: normalizeHistoryMoves(boardState.moves)
     };
 }
@@ -2047,6 +2676,22 @@ function normalizeHistoryBoardState(boardState) {
     return {};
 }
 
+function normalizeHistoryVisualState(visualState) {
+    if (!visualState) return {};
+    if (typeof visualState === 'string') {
+        try {
+            const parsed = JSON.parse(visualState);
+            return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+        } catch {
+            return {};
+        }
+    }
+    if (typeof visualState === 'object' && !Array.isArray(visualState)) {
+        return visualState;
+    }
+    return {};
+}
+
 function normalizeHistoryMoves(moves) {
     if (!Array.isArray(moves)) return [];
     return moves
@@ -2055,7 +2700,8 @@ function normalizeHistoryMoves(moves) {
             from: move.from,
             to: move.to,
             piece: move.piece || null,
-            captured: move.captured || null
+            captured: move.captured || null,
+            promotion: move.promotion || ''
         }));
 }
 
@@ -2151,7 +2797,8 @@ function formatHistoryMove(move) {
     const capture = move.captured
         ? ` captures ${move.captured.color || ''} ${move.captured.type || 'piece'}`.replace(/\s+/g, ' ').trimEnd()
         : '';
-    return `${color}${piece} ${move.from} -> ${move.to}${capture}`;
+    const promotion = move.promotion ? ` promotes to ${move.promotion}` : '';
+    return `${color}${piece} ${move.from} -> ${move.to}${capture}${promotion}`;
 }
 
 function capitalize(value) {
@@ -2167,6 +2814,15 @@ function renderEmojiMessages() {
     emojiMessages.forEach(message => {
         const row = document.createElement('div');
         row.className = `emoji-message ${message.sender}`;
+
+        if (message.text) {
+            const text = document.createElement('span');
+            text.className = 'emoji-message-text';
+            text.textContent = message.text;
+            row.appendChild(text);
+            log.appendChild(row);
+            return;
+        }
 
         if (message.src) {
             const name = document.createElement('span');
@@ -2186,6 +2842,16 @@ function renderEmojiMessages() {
     });
 
     log.scrollTop = log.scrollHeight;
+}
+
+function appendSystemEmojiMessage(text) {
+    if (!text) return;
+    emojiMessages.push({
+        id: createUserId('chat-system'),
+        sender: 'system',
+        text
+    });
+    renderEmojiMessages();
 }
 
 function bindAccountForm() {
@@ -2285,6 +2951,13 @@ function bindAccountForm() {
         if (queuedForMatch) {
             window.ChessSocket?.cancelQueue?.();
         }
+        if (activeRemoteGame && currentGameState?.status === 'active' && window.ChessSocket?.isOpen?.()) {
+            try {
+                window.ChessSocket?.leaveGame?.();
+            } catch (error) {
+                console.warn('Unable to notify backend about leaving game', error);
+            }
+        }
         window.ChessSocket?.close?.();
         ChessApi.logout();
         clearLegacyAccountProfile();
@@ -2301,6 +2974,9 @@ function bindAccountForm() {
         classicSnapbackInProgress = false;
         queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
+        resetDrawOfferState();
+        resetNetworkWarning();
+        resetRatingState();
         accountEditing = false;
         renderAccountProfile();
         showAccountMessage('Logged out.');
@@ -2355,7 +3031,8 @@ function renderAccountProfile() {
 
     if (profileName) profileName.textContent = accountProfile.username || 'Player';
     if (profileEmail) profileEmail.textContent = accountProfile.email || '-';
-    if (profileRating) profileRating.textContent = accountProfile.rating || '-';
+    if (profileRating) profileRating.textContent = formatAccountPrimaryRating();
+    renderAccountRatings();
 }
 
 function createEmptyAccountProfile() {
@@ -2365,21 +3042,79 @@ function createEmptyAccountProfile() {
         email: '',
         avatarSrc: '',
         rating: '-',
+        ratings: [],
         registered: false,
         signedIn: false
     };
 }
 
 function applyBackendAccountProfile(profile) {
+    const ratings = normalizeRatingList(profile?.ratings);
     accountProfile = {
         id: profile?.id || '',
         username: profile?.username || '',
         email: profile?.email || '',
         avatarSrc: accountProfile.avatarSrc || '',
         rating: profile?.rating ?? '-',
+        ratings,
         registered: true,
         signedIn: true
     };
+}
+
+function normalizeRatingList(ratings = []) {
+    if (!Array.isArray(ratings)) return [];
+    return ratings
+        .map(rating => ({
+            mode: rating.mode || modeForBoardSize(Number(rating.board_size || rating.boardSize || 8)),
+            boardSize: Number(rating.board_size || rating.boardSize || 8),
+            timeLimitMs: Number(rating.time_limit_ms || rating.timeLimitMs || 0),
+            timeLimitMinutes: Number(rating.time_limit_minutes || rating.timeLimitMinutes || 0),
+            rating: Number(rating.rating ?? 1200),
+            gamesPlayed: Number(rating.games_played || rating.gamesPlayed || 0)
+        }))
+        .filter(rating => rating.boardSize && rating.timeLimitMinutes);
+}
+
+function formatAccountPrimaryRating() {
+    const rating = accountProfile.rating;
+    if (rating !== undefined && rating !== null && rating !== '-') {
+        return String(rating);
+    }
+
+    const playedRatings = accountProfile.ratings.filter(item => item.gamesPlayed > 0);
+    if (playedRatings.length === 0) return '-';
+    return String(Math.max(...playedRatings.map(item => item.rating)));
+}
+
+function renderAccountRatings() {
+    const list = document.getElementById('account-ratings-list');
+    if (!list) return;
+
+    list.innerHTML = '';
+    if (!accountProfile.signedIn) return;
+
+    const ratings = [...accountProfile.ratings].sort((a, b) => {
+        if (a.boardSize !== b.boardSize) return a.boardSize - b.boardSize;
+        return a.timeLimitMinutes - b.timeLimitMinutes;
+    });
+
+    if (ratings.length === 0) {
+        const row = document.createElement('div');
+        row.className = 'account-rating-row';
+        row.append(createTextSpan('Scoped ratings are not loaded yet.'), createTextStrong('-'));
+        list.appendChild(row);
+        return;
+    }
+
+    ratings.forEach(rating => {
+        const row = document.createElement('div');
+        row.className = 'account-rating-row';
+
+        const label = `${modeLabel(rating.mode, rating.boardSize)} · ${rating.timeLimitMinutes} min · ${rating.gamesPlayed} games`;
+        row.append(createTextSpan(label), createTextStrong(String(rating.rating)));
+        list.appendChild(row);
+    });
 }
 
 async function refreshAccountFromBackend({ showMessages = false } = {}) {
@@ -2436,7 +3171,7 @@ function clearLegacyAccountProfile() {
 }
 
 function getAccountErrorMessage(error) {
-    return window.ChessApi?.getErrorMessage?.(error) || error?.message || 'Unexpected account error.';
+    return window.ChessApi?.getErrorMessage?.(error) || playerFacingErrorMessage(error, 'Something went wrong with your account.');
 }
 
 function renderAccountAvatar(imageId, fallbackId, src, fallbackText) {
@@ -2477,7 +3212,7 @@ function handleClassicDragStart(source, piece) {
     clearClassicMoveHighlights();
 
     if (!isClassicBackendGameReady()) {
-        setMatchmakingStatus('Waiting for game state from backend.');
+        setMatchmakingStatus(GAME_SETUP_PENDING_MESSAGE);
         return false;
     }
 
@@ -2524,23 +3259,12 @@ function handleClassicDrop(source, target, piece) {
         return 'snapback';
     }
 
-    pendingClassicMove = { from: source, to: target };
-    setMatchmakingStatus(`Sending move ${source}-${target}...`);
-
-    try {
-        if (window.ChessSocket?.move) {
-            ChessSocket.move({ from: source, to: target });
-        } else {
-            ChessSocket.send('MOVE', { from: source, to: target });
-        }
-        classicSnapbackInProgress = true;
-    } catch (error) {
-        pendingClassicMove = null;
-        classicSnapbackInProgress = false;
-        queuedClassicPositionUpdate = null;
-        setMatchmakingStatus(error.message || 'Unable to send move.');
+    if (isPromotionMove(piece, target, currentVisualBoardSize)) {
+        showPromotionPicker({ from: source, to: target, piece, boardSize: currentVisualBoardSize });
+        return 'snapback';
     }
 
+    submitBackendMove({ from: source, to: target });
     return 'snapback';
 }
 
@@ -2552,7 +3276,7 @@ function handleClassicSnapbackEnd() {
 
 function canSubmitClassicMove(source, target, piece) {
     if (!isClassicBackendGameReady()) {
-        setMatchmakingStatus('Waiting for game state from backend.');
+        setMatchmakingStatus(GAME_SETUP_PENDING_MESSAGE);
         return false;
     }
 
@@ -2567,7 +3291,7 @@ function canSubmitClassicMove(source, target, piece) {
     }
 
     if (!window.ChessSocket?.isOpen?.()) {
-        setMatchmakingStatus('WebSocket is not connected.');
+        setMatchmakingStatus(GAME_CONNECTION_LOST_MESSAGE);
         return false;
     }
 
@@ -2592,6 +3316,116 @@ function canSubmitClassicMove(source, target, piece) {
     }
 
     return true;
+}
+
+function submitBackendMove({ from, to, promotion = '', snapback = true }) {
+    pendingClassicMove = { from, to, promotion };
+    setMatchmakingStatus(`Sending move ${from}-${to}${promotion ? `=${promotion}` : ''}...`);
+
+    try {
+        if (window.ChessSocket?.move) {
+            ChessSocket.move({ from, to, promotion });
+        } else {
+            const payload = { from, to };
+            if (promotion) {
+                payload.promotion = promotion;
+            }
+            ChessSocket.send('MOVE', payload);
+        }
+        classicSnapbackInProgress = Boolean(snapback);
+        return true;
+    } catch (error) {
+        pendingClassicMove = null;
+        classicSnapbackInProgress = false;
+        queuedClassicPositionUpdate = null;
+        setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not send the move.'));
+        return false;
+    }
+}
+
+function isPromotionMove(piece, targetSquare, boardSize = currentVisualBoardSize) {
+    if (!piece || piece[1] !== 'P' || !targetSquare || !boardSize) return false;
+    const rank = Number(String(targetSquare).slice(1));
+    if (!Number.isInteger(rank)) return false;
+    return (piece[0] === 'w' && rank === boardSize) || (piece[0] === 'b' && rank === 1);
+}
+
+function showPromotionPicker({ from, to, piece, boardSize }) {
+    pendingPromotionMove = { from, to, piece, boardSize };
+    renderPromotionPicker();
+    setMatchmakingStatus('Choose promotion piece.');
+}
+
+function hidePromotionPicker() {
+    const picker = document.getElementById('promotion-picker');
+    if (!picker) return;
+    picker.classList.add('hidden');
+    picker.innerHTML = '';
+}
+
+function renderPromotionPicker() {
+    const picker = document.getElementById('promotion-picker');
+    if (!picker || !pendingPromotionMove) return;
+
+    picker.innerHTML = '';
+    picker.classList.remove('hidden');
+
+    const title = document.createElement('div');
+    title.className = 'promotion-picker-title';
+    title.textContent = 'Promote pawn to';
+
+    const options = document.createElement('div');
+    options.className = 'promotion-options';
+
+    promotionOptions().forEach(option => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'promotion-option';
+        button.title = option.label;
+        button.setAttribute('aria-label', option.label);
+
+        const img = document.createElement('img');
+        img.src = getPieceSrc(`${pendingPromotionMove.piece[0]}${option.code}`);
+        img.alt = option.label;
+        button.appendChild(img);
+
+        button.addEventListener('click', () => choosePromotion(option.type));
+        options.appendChild(button);
+    });
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'promotion-cancel-btn';
+    cancel.textContent = 'Cancel';
+    cancel.addEventListener('click', () => {
+        pendingPromotionMove = null;
+        hidePromotionPicker();
+        setMatchmakingStatus('Promotion cancelled.');
+    });
+
+    picker.append(title, options, cancel);
+}
+
+function promotionOptions() {
+    return [
+        { code: 'Q', type: 'queen', label: 'Queen' },
+        { code: 'R', type: 'rook', label: 'Rook' },
+        { code: 'B', type: 'bishop', label: 'Bishop' },
+        { code: 'N', type: 'knight', label: 'Knight' }
+    ];
+}
+
+function choosePromotion(promotion) {
+    if (!pendingPromotionMove) return;
+    const move = pendingPromotionMove;
+    pendingPromotionMove = null;
+    hidePromotionPicker();
+    submitBackendMove({
+        from: move.from,
+        to: move.to,
+        promotion,
+        snapback: move.boardSize === 8
+    });
 }
 
 function isClassicBackendGameReady() {
@@ -2704,9 +3538,9 @@ function renderPieceLegend() {
     });
 }
 
-function paintRenderedClassicSquares(rootSelector = '#myBoard') {
-    const light = getSquareStrategy(settings.lightSquareStrategyId);
-    const dark = getSquareStrategy(settings.darkSquareStrategyId);
+function paintRenderedClassicSquares(rootSelector = '#myBoard', visualState = null) {
+    const light = getVisualSquareStrategy(visualState, 'light');
+    const dark = getVisualSquareStrategy(visualState, 'dark');
 
     document.querySelectorAll(`${rootSelector} .white-1e1d7`).forEach(square => {
         square.style.setProperty('background-color', light.getColor(), 'important');
@@ -2724,11 +3558,52 @@ function paintRenderedClassicSquares(rootSelector = '#myBoard') {
 }
 
 function getPieceSrc(piece) {
+    return getVisualPieceSrc(piece);
+}
+
+function getVisualSquareStrategy(visualState, kind) {
+    const fallbackId = kind === 'light' ? settings.lightSquareStrategyId : settings.darkSquareStrategyId;
+    const square = visualState?.[`${kind}_square`] || visualState?.[`${kind}Square`];
+    const strategyId = square?.id
+        || visualState?.[`${kind}SquareStrategyId`]
+        || visualState?.[`${kind}_square_strategy_id`]
+        || fallbackId;
+    return getSquareStrategy(strategyId);
+}
+
+function getVisualPieceSrc(piece, visualState = null) {
+    if (!piece) return '';
+    const strategyId = getVisualPieceStrategyId(piece, visualState);
+    return getPieceStrategy(strategyId).getSrc(piece);
+}
+
+function getVisualPieceStrategyId(piece, visualState = null) {
+    const pieceColor = piece[0];
+    const pieceType = piece[1];
+    const colorKey = pieceColor === 'w' ? 'light' : 'dark';
+    const legacyColorKey = pieceColor === 'w' ? 'white' : 'black';
+    const pieces = visualState?.pieces || {};
+    const scopedStrategy = pieces?.[colorKey]?.[pieceType]
+        || pieces?.[legacyColorKey]?.[pieceType]
+        || visualState?.[`${colorKey}PieceStrategyByType`]?.[pieceType]
+        || visualState?.[`${colorKey}_piece_strategy_by_type`]?.[pieceType];
+
+    if (scopedStrategy) return scopedStrategy;
+
+    const sharedStrategy = typeof pieces?.[colorKey] === 'string'
+        ? pieces[colorKey]
+        : typeof pieces?.[legacyColorKey] === 'string'
+            ? pieces[legacyColorKey]
+            : '';
+
+    if (sharedStrategy) {
+        return normalizeLoadedPieceStrategyId(sharedStrategy, pieceType, colorKey);
+    }
+
     const strategyByType = piece[0] === 'w'
         ? settings.lightPieceStrategyByType
         : settings.darkPieceStrategyByType;
-    const strategyId = strategyByType[piece[1]];
-    return getPieceStrategy(strategyId).getSrc(piece);
+    return strategyByType[pieceType];
 }
 
 function refreshCurrentBoard(resetPosition = false) {
@@ -2817,7 +3692,16 @@ function handleCustomPointerDown(event) {
     const piece = currentCustomPosition[from];
     if (!from || !piece) return;
 
+    if (isCustomBackendGameReady() && !canStartCustomBackendMove(from, piece)) {
+        return;
+    }
+
     cancelCustomDrag();
+    clearCustomMoveHighlights();
+    if (isCustomBackendGameReady()) {
+        showCustomMoveHighlights(from, piece);
+    }
+
     customDragState = {
         pointerId: event.pointerId,
         from,
@@ -2881,6 +3765,7 @@ function handleCustomPointerCancel(event) {
         customDragSuppressClickUntil = Date.now() + CUSTOM_DRAG_CLICK_SUPPRESS_MS;
     }
     cancelCustomDrag();
+    clearCustomMoveHighlights();
 }
 
 function startCustomDragVisual(event) {
@@ -2927,6 +3812,9 @@ function setCustomDragTarget(square) {
     state.targetSquare = null;
 
     if (square?.dataset.square) {
+        if (isCustomBackendGameReady() && !isValidCustomBackendTarget(state.from, square.dataset.square)) {
+            return;
+        }
         square.classList.add('drag-target');
         state.targetSquare = square;
     }
@@ -2966,6 +3854,32 @@ function handleCustomSquareClick(event) {
     const target = event.currentTarget.dataset.square;
     if (!target) return;
 
+    if (isCustomBackendGameReady()) {
+        const targetPiece = currentCustomPosition[target];
+        if (selectedCustomSquare && selectedCustomSquare !== target) {
+            if (isValidCustomBackendTarget(selectedCustomSquare, target)) {
+                commitCustomMove(selectedCustomSquare, target);
+                return;
+            }
+            clearCustomMoveHighlights();
+            selectedCustomSquare = null;
+            refreshCurrentBoard(false);
+        }
+
+        if (targetPiece && canStartCustomBackendMove(target, targetPiece)) {
+            selectedCustomSquare = target;
+            refreshCurrentBoard(false);
+            clearCustomMoveHighlights();
+            showCustomMoveHighlights(target, targetPiece);
+            return;
+        }
+
+        clearCustomMoveHighlights();
+        selectedCustomSquare = null;
+        refreshCurrentBoard(false);
+        return;
+    }
+
     if (selectedCustomSquare && selectedCustomSquare !== target && currentCustomPosition[selectedCustomSquare]) {
         commitCustomMove(selectedCustomSquare, target);
         return;
@@ -2979,6 +3893,10 @@ function commitCustomMove(from, to) {
     if (!currentCustomPosition || !currentVisualBoardSize) return false;
     if (!from || !to || from === to || !currentCustomPosition[from]) return false;
 
+    if (isCustomBackendGameReady()) {
+        return submitCustomBackendMove(from, to);
+    }
+
     const movingPiece = currentCustomPosition[from];
     trackCapture(movingPiece, currentCustomPosition[to]);
     currentCustomPosition[to] = movingPiece;
@@ -2988,6 +3906,125 @@ function commitCustomMove(from, to) {
     renderCapturedPieces();
     handleLocalMoveComplete();
     return true;
+}
+
+function isCustomBackendGameReady() {
+    return activeRemoteGame
+        && currentGameState
+        && currentPlayerColor
+        && boardSizeFromGameState(currentGameState) !== 8;
+}
+
+function canStartCustomBackendMove(from, piece) {
+    if (pendingClassicMove) {
+        setMatchmakingStatus('Waiting for move confirmation.');
+        return false;
+    }
+
+    if (!window.ChessSocket?.isOpen?.()) {
+        setMatchmakingStatus(GAME_CONNECTION_LOST_MESSAGE);
+        return false;
+    }
+
+    if (currentGameState.status !== 'active') {
+        setMatchmakingStatus(currentGameState.status || 'Game is not active.');
+        return false;
+    }
+
+    if (!isCurrentPlayerTurn()) {
+        setMatchmakingStatus('Opponent turn.');
+        return false;
+    }
+
+    if (!piece || piece[0] !== frontendColorCode(currentPlayerColor)) {
+        setMatchmakingStatus('You can move only your pieces.');
+        return false;
+    }
+
+    const backendFrom = customKeyToBackendSquare(from, currentVisualBoardSize);
+    if (validTargetsForSquare(backendFrom).length === 0) {
+        setMatchmakingStatus('This piece has no legal moves.');
+        return false;
+    }
+
+    return true;
+}
+
+function submitCustomBackendMove(from, to) {
+    const movingPiece = currentCustomPosition[from];
+    if (!canStartCustomBackendMove(from, movingPiece)) {
+        clearCustomMoveHighlights();
+        return false;
+    }
+
+    const backendFrom = customKeyToBackendSquare(from, currentVisualBoardSize);
+    const backendTo = customKeyToBackendSquare(to, currentVisualBoardSize);
+    if (!backendFrom || !backendTo || !validTargetsForSquare(backendFrom).includes(backendTo)) {
+        setMatchmakingStatus('Illegal move.');
+        clearCustomMoveHighlights();
+        selectedCustomSquare = null;
+        refreshCurrentBoard(false);
+        return false;
+    }
+
+    selectedCustomSquare = null;
+    clearCustomMoveHighlights();
+
+    if (isPromotionMove(movingPiece, backendTo, currentVisualBoardSize)) {
+        showPromotionPicker({ from: backendFrom, to: backendTo, piece: movingPiece, boardSize: currentVisualBoardSize });
+        refreshCurrentBoard(false);
+        return true;
+    }
+
+    submitBackendMove({ from: backendFrom, to: backendTo, snapback: false });
+    refreshCurrentBoard(false);
+    return true;
+}
+
+function isValidCustomBackendTarget(from, to) {
+    const backendFrom = customKeyToBackendSquare(from, currentVisualBoardSize);
+    const backendTo = customKeyToBackendSquare(to, currentVisualBoardSize);
+    return Boolean(backendFrom && backendTo && validTargetsForSquare(backendFrom).includes(backendTo));
+}
+
+function customKeyToBackendSquare(key, boardSize) {
+    const [rawRow, rawCol] = String(key || '').split('-');
+    const row = Number(rawRow);
+    const col = Number(rawCol);
+    if (!Number.isInteger(row) || !Number.isInteger(col)) return '';
+    if (row < 0 || col < 0 || row >= boardSize || col >= boardSize) return '';
+    return `${fileLabel(col)}${boardSize - row}`;
+}
+
+function showCustomMoveHighlights(source, piece) {
+    const sourceSquare = customSquareElement(source);
+    sourceSquare?.classList.add('custom-move-source');
+
+    const backendFrom = customKeyToBackendSquare(source, currentVisualBoardSize);
+    validTargetsForSquare(backendFrom).forEach(target => {
+        const customTarget = backendSquareToCustomKey(target, currentVisualBoardSize);
+        const targetSquare = customSquareElement(customTarget);
+        if (!targetSquare) return;
+
+        const targetPiece = currentCustomPosition?.[customTarget];
+        const targetClass = piece && targetPiece && targetPiece[0] !== piece[0]
+            ? 'custom-capture-target'
+            : 'custom-move-target';
+        targetSquare.classList.add(targetClass);
+    });
+}
+
+function clearCustomMoveHighlights() {
+    document
+        .querySelectorAll('#myBoard .custom-move-source, #myBoard .custom-move-target, #myBoard .custom-capture-target')
+        .forEach(square => {
+            square.classList.remove('custom-move-source', 'custom-move-target', 'custom-capture-target');
+        });
+}
+
+function customSquareElement(square) {
+    if (!square) return null;
+    return document.querySelector(`#myBoard .custom-square[data-square="${square}"]`);
 }
 
 function buildVisualPosition(size) {
@@ -3636,7 +4673,7 @@ function persistUserStyles() {
     try {
         localStorage.setItem(USER_STYLES_KEY, JSON.stringify(userStyles));
     } catch {
-        throw new Error('Browser storage is full. Use smaller images for this test frontend.');
+        throw new Error('Browser storage is full. Use smaller images.');
     }
 }
 

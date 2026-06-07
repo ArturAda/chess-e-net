@@ -9,10 +9,10 @@ import (
 // Мок для тестирования интерфейса GameMode
 type MockMode struct{}
 
-func (m *MockMode) Setup() *Board                                  { return nil }
-func (m *MockMode) ValidateMove(_ *Board, _ Color, _, _ Pos) error { return nil }
-func (m *MockMode) ApplyMoveSideEffects(_ *Board, _, _ Pos)        {}
-func (m *MockMode) CheckState(_ *Board, _ Color) string            { return "" }
+func (m *MockMode) Setup() *Board                                          { return nil }
+func (m *MockMode) ValidateMove(_ *Board, _ Color, _, _ Pos) error         { return nil }
+func (m *MockMode) ApplyMoveSideEffects(_ *Board, _, _ Pos, _ MoveOptions) {}
+func (m *MockMode) CheckState(_ *Board, _ Color) string                    { return "" }
 
 func TestRegistry_RegisterAndGet(t *testing.T) {
 	reg := NewRegistry()

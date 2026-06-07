@@ -117,8 +117,9 @@ func (c *Client) ReadPump() {
 		switch wsMsg.Type {
 		case "MOVE":
 			var moveReq struct {
-				From string `json:"from"`
-				To   string `json:"to"`
+				From      string `json:"from"`
+				To        string `json:"to"`
+				Promotion string `json:"promotion,omitempty"`
 			}
 
 			if err := json.Unmarshal(wsMsg.Payload, &moveReq); err != nil {
@@ -152,7 +153,7 @@ func (c *Client) ReadPump() {
 				continue
 			}
 
-			err = c.ActiveGame.MakeMove(from, to)
+			err = c.ActiveGame.MakeMoveWithPromotion(from, to, moveReq.Promotion)
 			if err != nil {
 				code := ErrorCodeInvalidMove
 				recoverable := true

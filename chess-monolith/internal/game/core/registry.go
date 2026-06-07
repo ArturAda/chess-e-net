@@ -9,7 +9,7 @@ import (
 type GameMode interface {
 	Setup() *Board
 	ValidateMove(b *Board, turn Color, from, to Pos) error
-	ApplyMoveSideEffects(b *Board, from, to Pos)
+	ApplyMoveSideEffects(b *Board, from, to Pos, options MoveOptions)
 	CheckState(b *Board, turn Color) string
 }
 

@@ -46,6 +46,23 @@ func TestEnPassant(t *testing.T) {
 	assert.Equal(t, core.Black, lastRecord.Captured.Color)
 }
 
+func TestPawnPromotionUsesRequestedPiece(t *testing.T) {
+	s := setupTestSession()
+	s.Board.Grid = map[core.Pos]core.Piece{
+		{X: 0, Y: 6}: {Type: "pawn", Color: core.White, Meta: map[string]any{}},
+		{X: 4, Y: 0}: {Type: "king", Color: core.White, Meta: map[string]any{}},
+		{X: 4, Y: 7}: {Type: "king", Color: core.Black, Meta: map[string]any{}},
+	}
+	s.Turn = core.White
+
+	err := s.MakeMoveWithPromotion(core.Pos{X: 0, Y: 6}, core.Pos{X: 0, Y: 7}, "rook")
+
+	assert.NoError(t, err)
+	piece := s.Board.Grid[core.Pos{X: 0, Y: 7}]
+	assert.Equal(t, "rook", piece.Type)
+	assert.Equal(t, "rook", s.Board.History[len(s.Board.History)-1].Promotion)
+}
+
 func TestSetupSupportsModernBoardSizes(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -105,7 +122,7 @@ func TestModernPawnRulesUseBoardHeight(t *testing.T) {
 	board = core.NewBoard(10, 10)
 	board.Grid[core.Pos{X: 0, Y: 8}] = core.Piece{Type: "pawn", Color: core.White, Meta: make(map[string]any)}
 
-	mode.ApplyMoveSideEffects(board, core.Pos{X: 0, Y: 8}, core.Pos{X: 0, Y: 9})
+	mode.ApplyMoveSideEffects(board, core.Pos{X: 0, Y: 8}, core.Pos{X: 0, Y: 9}, core.MoveOptions{})
 
 	promoted := board.Grid[core.Pos{X: 0, Y: 9}]
 	assert.Equal(t, "queen", promoted.Type)
@@ -121,7 +138,7 @@ func TestModernCastlingUsesBoardWidth(t *testing.T) {
 	err := mode.ValidateMove(board, core.White, core.Pos{X: 5, Y: 0}, core.Pos{X: 7, Y: 0})
 	assert.NoError(t, err)
 
-	mode.ApplyMoveSideEffects(board, core.Pos{X: 5, Y: 0}, core.Pos{X: 7, Y: 0})
+	mode.ApplyMoveSideEffects(board, core.Pos{X: 5, Y: 0}, core.Pos{X: 7, Y: 0}, core.MoveOptions{})
 
 	king := board.Grid[core.Pos{X: 7, Y: 0}]
 	rook := board.Grid[core.Pos{X: 6, Y: 0}]

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -59,10 +60,11 @@ type PieceDTO struct {
 }
 
 type MoveDTO struct {
-	From     string    `json:"from"`
-	To       string    `json:"to"`
-	Piece    PieceDTO  `json:"piece"`
-	Captured *PieceDTO `json:"captured,omitempty"`
+	From      string    `json:"from"`
+	To        string    `json:"to"`
+	Piece     PieceDTO  `json:"piece"`
+	Captured  *PieceDTO `json:"captured,omitempty"`
+	Promotion string    `json:"promotion,omitempty"`
 }
 
 type PersistedGameStateDTO struct {
@@ -91,6 +93,10 @@ func NewSession(registry *core.Registry, modeName string, timeLimit time.Duratio
 }
 
 func (s *GameSession) MakeMove(from, to core.Pos) error {
+	return s.MakeMoveWithPromotion(from, to, "")
+}
+
+func (s *GameSession) MakeMoveWithPromotion(from, to core.Pos, promotion string) error {
 	s.Mu.Lock()
 	defer s.Mu.Unlock()
 
@@ -99,6 +105,12 @@ func (s *GameSession) MakeMove(from, to core.Pos) error {
 	}
 
 	if err := s.Mode.ValidateMove(s.Board, s.Turn, from, to); err != nil {
+		return err
+	}
+
+	piece := s.Board.Grid[from]
+	normalizedPromotion, err := normalizePromotionChoice(s.Board, piece, to, promotion)
+	if err != nil {
 		return err
 	}
 
@@ -121,7 +133,7 @@ func (s *GameSession) MakeMove(from, to core.Pos) error {
 		}
 	}
 
-	s.Mode.ApplyMoveSideEffects(s.Board, from, to)
+	s.Mode.ApplyMoveSideEffects(s.Board, from, to, core.MoveOptions{Promotion: normalizedPromotion})
 
 	if s.Turn == core.White {
 		s.Turn = core.Black
@@ -132,6 +144,28 @@ func (s *GameSession) MakeMove(from, to core.Pos) error {
 	s.LastMove = now
 	s.Status = s.Mode.CheckState(s.Board, s.Turn)
 	return nil
+}
+
+func normalizePromotionChoice(board *core.Board, piece core.Piece, to core.Pos, promotion string) (string, error) {
+	promotion = strings.ToLower(strings.TrimSpace(promotion))
+	isPromotion := piece.Type == "pawn" && (to.Y == 0 || to.Y == board.Height-1)
+	if !isPromotion {
+		if promotion != "" {
+			return "", errors.New("promotion is not available for this move")
+		}
+		return "", nil
+	}
+
+	if promotion == "" {
+		return "queen", nil
+	}
+
+	switch promotion {
+	case "queen", "rook", "bishop", "knight":
+		return promotion, nil
+	default:
+		return "", errors.New("invalid promotion piece")
+	}
 }
 
 // RunTimer запускает фоновую проверку времени (например, 2 раза в секунду)
@@ -330,9 +364,10 @@ func buildLastMoveDTO(board *core.Board) *MoveDTO {
 
 	last := board.History[len(board.History)-1]
 	dto := &MoveDTO{
-		From:  core.FormatSquare(last.From),
-		To:    core.FormatSquare(last.To),
-		Piece: buildPieceDTO(core.FormatSquare(last.To), last.Piece),
+		From:      core.FormatSquare(last.From),
+		To:        core.FormatSquare(last.To),
+		Piece:     buildPieceDTO(core.FormatSquare(last.To), last.Piece),
+		Promotion: last.Promotion,
 	}
 
 	if last.Captured != nil {
@@ -347,9 +382,10 @@ func buildMoveHistoryDTO(board *core.Board) []MoveDTO {
 	moves := make([]MoveDTO, 0, len(board.History))
 	for _, move := range board.History {
 		dto := MoveDTO{
-			From:  core.FormatSquare(move.From),
-			To:    core.FormatSquare(move.To),
-			Piece: buildPieceDTO(core.FormatSquare(move.To), move.Piece),
+			From:      core.FormatSquare(move.From),
+			To:        core.FormatSquare(move.To),
+			Piece:     buildPieceDTO(core.FormatSquare(move.To), move.Piece),
+			Promotion: move.Promotion,
 		}
 		if move.Captured != nil {
 			captured := buildPieceDTO("", *move.Captured)
