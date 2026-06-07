@@ -66,6 +66,7 @@ jobs:
       - name: Commit and push changes
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
+          cd ..
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
           git add README.md README.ru.md
