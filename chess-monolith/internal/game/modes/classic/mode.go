@@ -239,10 +239,11 @@ func (m *Mode) ValidateMove(board *core.Board, turn core.Color, from, to core.Po
 	return nil
 }
 
-func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
+func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos, options core.MoveOptions) {
 	piece := board.Grid[from]
 	targetOk := false
 	var captured *core.Piece
+	promotion := ""
 	if target, ok := board.Grid[to]; ok {
 		targetOk = true
 		capturedPiece := target
@@ -277,9 +278,13 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	board.Grid[to] = piece
 	delete(board.Grid, from)
 
-	// 3. Превращение пешки в ферзя
+	// 3. Превращение пешки в выбранную фигуру
 	if piece.Type == "pawn" && (to.Y == 0 || to.Y == board.Height-1) {
-		piece.Type = "queen"
+		promotion = options.Promotion
+		if promotion == "" {
+			promotion = "queen"
+		}
+		piece.Type = promotion
 	}
 
 	// 4. Запись метаданных и истории
@@ -290,7 +295,7 @@ func (m *Mode) ApplyMoveSideEffects(board *core.Board, from, to core.Pos) {
 	piece.Meta["moved"] = true
 	board.Grid[to] = piece // Обновляем структуру на доске
 
-	board.History = append(board.History, core.MoveRecord{From: from, To: to, Piece: piece, Captured: captured})
+	board.History = append(board.History, core.MoveRecord{From: from, To: to, Piece: piece, Captured: captured, Promotion: promotion})
 }
 
 func (m *Mode) CheckState(board *core.Board, turn core.Color) string {

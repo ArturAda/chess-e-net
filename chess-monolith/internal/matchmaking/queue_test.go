@@ -66,9 +66,9 @@ func (m *DummyMode) Setup() *core.Board {
 	}
 	return core.NewBoard(size, size)
 }
-func (m *DummyMode) ValidateMove(b *core.Board, turn core.Color, from, to core.Pos) error { return nil }
-func (m *DummyMode) ApplyMoveSideEffects(b *core.Board, from, to core.Pos)                {}
-func (m *DummyMode) CheckState(b *core.Board, turn core.Color) string                     { return "active" }
+func (m *DummyMode) ValidateMove(b *core.Board, turn core.Color, from, to core.Pos) error      { return nil }
+func (m *DummyMode) ApplyMoveSideEffects(b *core.Board, from, to core.Pos, _ core.MoveOptions) {}
+func (m *DummyMode) CheckState(b *core.Board, turn core.Color) string                          { return "active" }
 
 func readClientMessage(t *testing.T, client *ws.Client) ws.Message {
 	t.Helper()

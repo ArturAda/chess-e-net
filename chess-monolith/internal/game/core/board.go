@@ -1,9 +1,14 @@
 package core
 
 type MoveRecord struct {
-	From, To Pos
-	Piece    Piece
-	Captured *Piece
+	From, To  Pos
+	Piece     Piece
+	Captured  *Piece
+	Promotion string
+}
+
+type MoveOptions struct {
+	Promotion string
 }
 
 // Board хранит состояние доски в виде карты

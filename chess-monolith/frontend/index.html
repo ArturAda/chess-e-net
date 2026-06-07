@@ -7,7 +7,7 @@
     <meta name="description" content="Legendary Chess Game">
     <link rel="icon" type="image/png" href="images/title/Chess_Title.png">
     <link rel="stylesheet" href="css/chessboard-1.0.0.min.css">
-    <link rel="stylesheet" href="css/style.css">
+    <link rel="stylesheet" href="css/style.css?v=20260607-history-errors">
 </head>
 
 <body class="no-page-scroll">
@@ -31,7 +31,7 @@
             <button class="img-btn-wrapper" onclick="navigateTo('page-settings')">
                 <img src="images/buttons/Settings.png" class="menu-img" alt="Settings">
             </button>
-            <button class="img-btn-wrapper" onclick="navigateTo('page-wip')">
+            <button class="img-btn-wrapper" onclick="navigateTo('page-rating')">
                 <img src="images/buttons/Rating.png" class="menu-img" alt="Rating">
             </button>
             <button class="img-btn-wrapper" onclick="navigateTo('page-history')">
@@ -56,6 +56,31 @@
 
     <div id="page-wip" class="page">
         <h2>Sorry, but we are still working on this</h2>
+        <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
+    </div>
+
+    <div id="page-rating" class="page">
+        <h2>Rating</h2>
+        <section class="rating-panel">
+            <div class="rating-controls" aria-label="Rating filters">
+                <div class="rating-control-group">
+                    <span>Board</span>
+                    <button type="button" class="rating-filter-btn" data-rating-board-size="8">8×8</button>
+                    <button type="button" class="rating-filter-btn" data-rating-board-size="10">10×10</button>
+                    <button type="button" class="rating-filter-btn" data-rating-board-size="12">12×12</button>
+                </div>
+                <div class="rating-control-group">
+                    <span>Time</span>
+                    <button type="button" class="rating-filter-btn" data-rating-time-control="1">1 min</button>
+                    <button type="button" class="rating-filter-btn" data-rating-time-control="5">5 min</button>
+                    <button type="button" class="rating-filter-btn" data-rating-time-control="10">10 min</button>
+                    <button type="button" class="rating-filter-btn" data-rating-time-control="30">30 min</button>
+                </div>
+                <button id="rating-refresh-btn" class="mini-action-btn rating-refresh-btn" type="button">Refresh</button>
+            </div>
+            <div id="rating-scope-label" class="rating-scope-label"></div>
+            <div id="rating-leaderboard" class="rating-leaderboard" aria-live="polite"></div>
+        </section>
         <button class="btn back-btn" onclick="navigateTo('page-menu')">← Back</button>
     </div>
 
@@ -114,6 +139,7 @@
                     <strong id="account-profile-rating">-</strong>
                 </div>
             </div>
+            <div id="account-ratings-list" class="account-ratings-list"></div>
             <button id="account-refresh-btn" class="mini-action-btn" type="button">Refresh Profile</button>
             <button id="account-logout-btn" class="mini-action-btn account-logout-btn" type="button">Log Out</button>
         </section>
@@ -251,6 +277,11 @@
                 <button type="button" class="time-control-btn" data-modern-time-control="10">10 min</button>
                 <button type="button" class="time-control-btn" data-modern-time-control="30">30 min</button>
             </div>
+            <h3>Match Type</h3>
+            <div class="match-type-buttons">
+                <button type="button" class="match-type-btn" data-modern-ranked="false">Casual</button>
+                <button type="button" class="match-type-btn" data-modern-ranked="true">Ranked</button>
+            </div>
             <button id="modern-start-btn" class="mini-action-btn classic-start-btn" type="button" disabled>Find Match</button>
         </div>
     </div>
@@ -265,6 +296,11 @@
                 <button type="button" class="time-control-btn" data-time-control="5">5 min</button>
                 <button type="button" class="time-control-btn" data-time-control="10">10 min</button>
                 <button type="button" class="time-control-btn" data-time-control="30">30 min</button>
+            </div>
+            <h3>Match Type</h3>
+            <div class="match-type-buttons">
+                <button type="button" class="match-type-btn" data-classic-ranked="false">Casual</button>
+                <button type="button" class="match-type-btn" data-classic-ranked="true">Ranked</button>
             </div>
             <button id="classic-start-btn" class="mini-action-btn classic-start-btn" type="button" disabled>Find Match</button>
         </div>
@@ -296,6 +332,21 @@
                     <div id="me-captured" class="captured-tray captured-tray-bottom" aria-label="Your captures"></div>
                 </div>
                 <aside class="game-side-panel">
+                    <div class="game-action-panel">
+                        <div id="network-warning" class="network-warning hidden" aria-live="assertive"></div>
+                        <div id="draw-offer-panel" class="draw-offer-panel hidden" aria-live="polite">
+                            <div class="draw-offer-copy">
+                                <strong id="draw-offer-message"></strong>
+                                <span id="draw-offer-countdown"></span>
+                            </div>
+                            <div id="draw-response-actions" class="draw-response-actions">
+                                <button id="draw-accept-btn" class="mini-action-btn" type="button">Accept</button>
+                                <button id="draw-decline-btn" class="mini-action-btn draw-decline-btn" type="button">Decline</button>
+                            </div>
+                        </div>
+                        <button id="draw-offer-btn" class="mini-action-btn draw-offer-btn" type="button">Offer Draw</button>
+                    </div>
+                    <div id="promotion-picker" class="promotion-picker hidden" aria-live="polite"></div>
                     <div class="emoji-chat" aria-label="Emoji chat">
                         <div id="emoji-chat-log" class="emoji-chat-log" aria-live="polite"></div>
                         <div id="emoji-chat-picker" class="emoji-chat-picker"></div>
@@ -309,10 +360,10 @@
         </div>
     </div>
 
-    <script src="js/jquery-3.6.0.min.js"></script>
-    <script src="js/chessboard-1.0.0.min.js"></script>
-    <script src="js/api.js"></script>
-    <script src="js/socket.js"></script>
-    <script src="js/lobby.js"></script>
+    <script src="js/jquery-3.6.0.min.js?v=20260607-frontend-sync"></script>
+    <script src="js/chessboard-1.0.0.min.js?v=20260607-frontend-sync"></script>
+    <script src="js/api.js?v=20260607-history-errors"></script>
+    <script src="js/socket.js?v=20260607-history-errors"></script>
+    <script src="js/lobby.js?v=20260607-history-errors"></script>
 </body>
 </html>

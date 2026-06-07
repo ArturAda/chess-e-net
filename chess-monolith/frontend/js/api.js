@@ -1,6 +1,10 @@
 const ChessApi = (() => {
     const API_BASE_URL = (window.CHESS_API_BASE_URL || '/api').replace(/\/$/, '');
     const TOKEN_STORAGE_KEY = 'chessemag_jwt';
+    const CONNECTION_MESSAGE = 'The game room is not responding. Try again in a moment.';
+    const SESSION_MESSAGE = 'Your session expired. Log in again.';
+    const GENERIC_MESSAGE = 'Something went wrong. Try again.';
+    const TECHNICAL_MESSAGE_PATTERN = /\b(backend|localhost|websocket|jwt|authorization bearer|token|request failed|frontend|internal server error|invalid data|key:|binding)\b/i;
 
     let memoryToken = '';
 
@@ -60,7 +64,7 @@ const ChessApi = (() => {
         if (auth) {
             const token = getToken();
             if (!token) {
-                throw new ApiError('Authorization token is missing.', { status: 401 });
+                throw new ApiError(SESSION_MESSAGE, { status: 401 });
             }
             headers.Authorization = `Bearer ${token}`;
         }
@@ -69,7 +73,7 @@ const ChessApi = (() => {
         try {
             response = await fetch(`${API_BASE_URL}${path}`, options);
         } catch {
-            throw new ApiError('Backend is unavailable. Check that localhost:8080 is running.');
+            throw new ApiError(CONNECTION_MESSAGE);
         }
 
         const payload = await parseJSONResponse(response);
@@ -106,7 +110,7 @@ const ChessApi = (() => {
         });
 
         if (!payload?.token) {
-            throw new ApiError('Backend did not return a JWT token.');
+            throw new ApiError('Login did not finish. Try again.');
         }
 
         setToken(payload.token);
@@ -128,15 +132,57 @@ const ChessApi = (() => {
         return request(`/games/${encodeURIComponent(id)}`, { auth: true });
     }
 
+    async function myRatings() {
+        return request('/me/ratings', { auth: true });
+    }
+
+    async function leaderboard({ mode = 'classic', boardSize = 8, timeLimitMinutes = 10, limit = 50 } = {}) {
+        const params = new URLSearchParams({
+            mode,
+            board_size: String(boardSize),
+            time_limit: String(timeLimitMinutes),
+            limit: String(limit)
+        });
+        return request(`/leaderboard?${params.toString()}`);
+    }
+
     function logout() {
         clearToken();
     }
 
     function getErrorMessage(error) {
         if (error instanceof ApiError) {
-            return error.message;
+            return playerFacingApiMessage(error);
         }
-        return error?.message || 'Unexpected frontend error.';
+        return playerFacingText(error?.message, GENERIC_MESSAGE);
+    }
+
+    function playerFacingApiMessage(error) {
+        const message = String(error?.message || '').trim();
+
+        if (error?.status === 0) return CONNECTION_MESSAGE;
+        if (error?.status === 401) {
+            if (/invalid email or password|credentials/i.test(message)) {
+                return 'Incorrect email or password.';
+            }
+            return SESSION_MESSAGE;
+        }
+        if (error?.status === 403) return 'This action is not available for your account.';
+        if (error?.status === 404) return 'The requested game was not found.';
+        if (error?.status >= 500) return 'The game room is busy right now. Try again soon.';
+        if (error?.status === 400 && TECHNICAL_MESSAGE_PATTERN.test(message)) {
+            return 'Check the entered fields and try again.';
+        }
+
+        return playerFacingText(message, GENERIC_MESSAGE);
+    }
+
+    function playerFacingText(message, fallback) {
+        const text = String(message || '').trim();
+        if (!text || TECHNICAL_MESSAGE_PATTERN.test(text)) {
+            return fallback;
+        }
+        return text;
     }
 
     return {
@@ -146,6 +192,8 @@ const ChessApi = (() => {
         me,
         listGames,
         getGame,
+        myRatings,
+        leaderboard,
         logout,
         getToken,
         setToken,
