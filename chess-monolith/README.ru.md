@@ -4,7 +4,7 @@
 
 [![Build and Test](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml/badge.svg)](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml)
 <!-- coverage-badge-start -->
-[![Coverage](https://img.shields.io/badge/coverage-0%25-blue)](https://github.com/ArturAda/chess-e-net/actions)
+[![Coverage](https://img.shields.io/badge/Coverage-72.7%25-yellow.svg)](#)
 <!-- coverage-badge-end -->
 
 Chessemag — это современная, расширяемая многопользовательская платформа для игры в шахматы, созданная с использованием Go (Golang) и чистого JavaScript на фронтенде. Платформа поддерживает классические шахматы 8x8, а также современные варианты (10x10, 12x12), подбор игроков в реальном времени, рейтинговые игры на основе ELO и интерактивную историю партий.
@@ -186,4 +186,4 @@ chess-monolith/
 
 ## Лицензия
 
-Этот проект является проектом с открытым исходным кодом и доступен по [лицензии MIT](LICENSE).
+Этот проект является проектом с открытым исходным кодом и доступен по [лицензии MIT](../LICENSE).

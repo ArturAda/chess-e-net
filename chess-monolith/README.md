@@ -4,7 +4,7 @@
 
 [![Build and Test](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml/badge.svg)](https://github.com/ArturAda/chess-e-net/actions/workflows/ci.yml)
 <!-- coverage-badge-start -->
-[![Coverage](https://img.shields.io/badge/coverage-0%25-blue)](https://github.com/ArturAda/chess-e-net/actions)
+[![Coverage](https://img.shields.io/badge/Coverage-72.7%25-yellow.svg)](#)
 <!-- coverage-badge-end -->
 
 Chessemag is a modern, extensible multiplayer chess platform built with Go (Golang) and a vanilla JavaScript frontend. It supports classic 8x8 chess alongside custom modern variants (10x10, 12x12), real-time matchmaking, ELO-based ranked play, and interactive game histories.
@@ -186,4 +186,4 @@ While gameplay primarily occurs over WebSockets, the application provides REST e
 
 ## License
 
-This project is open-source and available under the [MIT License](LICENSE).
+This project is open-source and available under the [MIT License](../LICENSE).
