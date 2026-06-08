@@ -11,9 +11,11 @@ let currentVisualBoardSize = null;
 let currentTimeControlMinutes = null;
 let currentGameMode = 'classic';
 let currentCustomPosition = null;
+let selectedClassicSquare = null;
 let selectedCustomSquare = null;
 let customDragState = null;
 let customDragSuppressClickUntil = 0;
+let classicClickSuppressUntil = 0;
 let selectedClassicBoardSize = null;
 let selectedClassicTimeMinutes = null;
 let selectedClassicIsRanked = false;
@@ -600,6 +602,7 @@ function resetClassicEntry() {
     currentTimeControlMinutes = null;
     currentGameMode = 'classic';
     currentCustomPosition = null;
+    selectedClassicSquare = null;
     selectedCustomSquare = null;
     selectedClassicBoardSize = 8;
     selectedClassicTimeMinutes = null;
@@ -633,6 +636,7 @@ function resetClassicEntry() {
 
     const host = document.getElementById('myBoard');
     if (host) {
+        host.removeEventListener('click', handleClassicBoardClick);
         host.innerHTML = '';
         host.className = 'board-host';
         host.removeAttribute('style');
@@ -669,6 +673,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
     const host = document.getElementById('myBoard');
     if (!host) return;
 
+    host.removeEventListener('click', handleClassicBoardClick);
     host.innerHTML = '';
     host.className = 'board-host';
     host.style.width = '';
@@ -690,6 +695,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
             onDrop: handleClassicDrop,
             onSnapbackEnd: handleClassicSnapbackEnd
         });
+        host.addEventListener('click', handleClassicBoardClick);
         paintRenderedClassicSquares();
         requestAnimationFrame(paintRenderedClassicSquares);
         return;
@@ -704,6 +710,7 @@ function renderClassicBoard(size, timeControlMinutes, resetPosition = false, res
 
 function destroyBoard() {
     cancelCustomDrag();
+    document.getElementById('myBoard')?.removeEventListener('click', handleClassicBoardClick);
     if (board) {
         board.destroy();
         board = null;
@@ -722,6 +729,7 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode,
     currentGameId = null;
     pendingPromotionMove = null;
     currentValidMoves = {};
+    selectedClassicSquare = null;
     pendingClassicMove = null;
     classicSnapbackInProgress = false;
     queuedClassicPositionUpdate = null;
@@ -739,6 +747,7 @@ function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode,
             if (!isCurrentMatchRequest(mode, boardSize, timeControlMinutes)) return;
             activeMatchRequest = null;
             queuedForMatch = false;
+            selectedClassicSquare = null;
             pendingClassicMove = null;
             pendingPromotionMove = null;
             classicSnapbackInProgress = false;
@@ -758,6 +767,7 @@ function cancelMatchmaking() {
     }
     queuedForMatch = false;
     activeMatchRequest = null;
+    selectedClassicSquare = null;
     pendingClassicMove = null;
     pendingPromotionMove = null;
     classicSnapbackInProgress = false;
@@ -810,6 +820,7 @@ function handleMatchFound(payload) {
     currentGameId = payload?.game_id || null;
     currentPlayerColor = payload?.player_color || null;
     currentValidMoves = {};
+    selectedClassicSquare = null;
     pendingClassicMove = null;
     pendingPromotionMove = null;
     classicSnapbackInProgress = false;
@@ -848,6 +859,7 @@ function handleGameState(gameState) {
     currentGameId = gameState.game_id || currentGameId;
     currentPlayerColor = gameState.player_color || currentPlayerColor;
     currentValidMoves = normalizeValidMoves(gameState.valid_moves);
+    selectedClassicSquare = null;
     clearClassicMoveHighlights();
     clearCustomMoveHighlights();
 
@@ -895,6 +907,7 @@ function handleSocketProtocolError(payload) {
         activeMatchRequest = null;
         currentGameState = null;
         currentValidMoves = {};
+        selectedClassicSquare = null;
         pendingClassicMove = null;
         pendingPromotionMove = null;
         classicSnapbackInProgress = false;
@@ -909,6 +922,7 @@ function handleSocketProtocolError(payload) {
 }
 
 function handleMoveRejected(payload) {
+    selectedClassicSquare = null;
     pendingClassicMove = null;
     pendingPromotionMove = null;
     queuedClassicPositionUpdate = null;
@@ -922,6 +936,7 @@ function handleSocketClose() {
     if (queuedForMatch) {
         queuedForMatch = false;
         activeMatchRequest = null;
+        selectedClassicSquare = null;
         pendingClassicMove = null;
         pendingPromotionMove = null;
         classicSnapbackInProgress = false;
@@ -2938,6 +2953,7 @@ function bindAccountForm() {
         currentPlayerColor = null;
         currentGameId = null;
         currentValidMoves = {};
+        selectedClassicSquare = null;
         pendingClassicMove = null;
         classicSnapbackInProgress = false;
         queuedClassicPositionUpdate = null;
@@ -3229,9 +3245,73 @@ function pieceTheme(piece) {
     return getPieceSrc(piece);
 }
 
-function handleClassicDragStart(source, piece) {
-    clearClassicMoveHighlights();
+function handleClassicBoardClick(event) {
+    if (Date.now() < classicClickSuppressUntil) return;
 
+    const squareElement = event.target.closest?.('#myBoard .square-55d63');
+    const target = squareElement?.dataset.square || '';
+    if (!target || !isClassicBackendGameReady()) return;
+
+    const position = board?.position?.() || {};
+    const targetPiece = position[target];
+
+    if (selectedClassicSquare) {
+        const source = selectedClassicSquare;
+        const sourcePiece = position[source];
+
+        if (source === target) {
+            clearClassicSelection();
+            return;
+        }
+
+        if (sourcePiece && validTargetsForSquare(source).includes(target)) {
+            commitClassicClickMove(source, target, sourcePiece);
+            return;
+        }
+
+        clearClassicSelection();
+    }
+
+    if (targetPiece && canStartClassicBackendMove(target, targetPiece)) {
+        selectedClassicSquare = target;
+        clearClassicMoveHighlights();
+        showClassicMoveHighlights(target, targetPiece);
+        return;
+    }
+
+    clearClassicSelection();
+}
+
+function handleClassicDragStart(source, piece) {
+    const preserveClickSelection = shouldPreserveClassicClickSelection(source, piece);
+    if (!preserveClickSelection) {
+        selectedClassicSquare = null;
+        clearClassicMoveHighlights();
+    }
+
+    if (!canStartClassicBackendMove(source, piece)) {
+        return false;
+    }
+
+    showClassicMoveHighlights(source, piece);
+    return true;
+}
+
+function shouldPreserveClassicClickSelection(target, targetPiece) {
+    if (!selectedClassicSquare || !target || selectedClassicSquare === target) {
+        return false;
+    }
+
+    const selectedPiece = board?.position?.()?.[selectedClassicSquare];
+    return Boolean(
+        selectedPiece
+        && targetPiece
+        && !isClassicPieceOwnedByPlayer(targetPiece)
+        && validTargetsForSquare(selectedClassicSquare).includes(target)
+    );
+}
+
+function canStartClassicBackendMove(source, piece) {
     if (!isClassicBackendGameReady()) {
         setMatchmakingStatus(GAME_SETUP_PENDING_MESSAGE);
         return false;
@@ -3267,11 +3347,14 @@ function handleClassicDragStart(source, piece) {
         return false;
     }
 
-    showClassicMoveHighlights(source, piece);
     return true;
 }
 
 function handleClassicDrop(source, target, piece) {
+    if (source !== target) {
+        classicClickSuppressUntil = Date.now() + CUSTOM_DRAG_CLICK_SUPPRESS_MS;
+    }
+    selectedClassicSquare = null;
     clearClassicMoveHighlights();
 
     if (!target || target === 'offboard' || source === target) return 'snapback';
@@ -3289,10 +3372,34 @@ function handleClassicDrop(source, target, piece) {
     return 'snapback';
 }
 
+function commitClassicClickMove(source, target, piece) {
+    if (!canSubmitClassicMove(source, target, piece)) {
+        clearClassicSelection();
+        return false;
+    }
+
+    selectedClassicSquare = null;
+    clearClassicMoveHighlights();
+
+    if (isPromotionMove(piece, target, currentVisualBoardSize)) {
+        showPromotionPicker({
+            from: source,
+            to: target,
+            piece,
+            boardSize: currentVisualBoardSize,
+            snapback: false
+        });
+        return true;
+    }
+
+    return submitBackendMove({ from: source, to: target, snapback: false });
+}
+
 function handleClassicSnapbackEnd() {
     classicSnapbackInProgress = false;
     clearClassicMoveHighlights();
     flushQueuedClassicPositionUpdate();
+    restoreClassicSelectionHighlights();
 }
 
 function canSubmitClassicMove(source, target, piece) {
@@ -3371,8 +3478,8 @@ function isPromotionMove(piece, targetSquare, boardSize = currentVisualBoardSize
     return (piece[0] === 'w' && rank === boardSize) || (piece[0] === 'b' && rank === 1);
 }
 
-function showPromotionPicker({ from, to, piece, boardSize }) {
-    pendingPromotionMove = { from, to, piece, boardSize };
+function showPromotionPicker({ from, to, piece, boardSize, snapback = boardSize === 8 }) {
+    pendingPromotionMove = { from, to, piece, boardSize, snapback: Boolean(snapback) };
     renderPromotionPicker();
     setMatchmakingStatus('Choose promotion piece.');
 }
@@ -3445,7 +3552,7 @@ function choosePromotion(promotion) {
         from: move.from,
         to: move.to,
         promotion,
-        snapback: move.boardSize === 8
+        snapback: Boolean(move.snapback)
     });
 }
 
@@ -3494,6 +3601,29 @@ function clearClassicMoveHighlights() {
         .forEach(square => {
             square.classList.remove('classic-move-source', 'classic-move-target', 'classic-capture-target');
         });
+}
+
+function clearClassicSelection() {
+    selectedClassicSquare = null;
+    clearClassicMoveHighlights();
+}
+
+function restoreClassicSelectionHighlights() {
+    if (!selectedClassicSquare) return;
+
+    const piece = board?.position?.()?.[selectedClassicSquare];
+    const canKeepSelection = isClassicBackendGameReady()
+        && currentGameState?.status === 'active'
+        && isCurrentPlayerTurn()
+        && isClassicPieceOwnedByPlayer(piece)
+        && validTargetsForSquare(selectedClassicSquare).length > 0;
+
+    if (!canKeepSelection) {
+        selectedClassicSquare = null;
+        return;
+    }
+
+    showClassicMoveHighlights(selectedClassicSquare, piece);
 }
 
 function classicSquareElement(square) {
