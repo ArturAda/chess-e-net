@@ -227,6 +227,9 @@ func resultForUser(item Game, userID uuid.UUID) string {
 	if item.Status == "active" {
 		return "active"
 	}
+	if item.Status == StaleActiveGameStatus {
+		return StaleActiveGameStatus
+	}
 	if strings.Contains(item.Status, "draw") {
 		return "draw"
 	}

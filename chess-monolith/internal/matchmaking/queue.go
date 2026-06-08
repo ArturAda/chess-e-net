@@ -242,11 +242,7 @@ func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, boardSi
 			p1UUID, _ := uuid.Parse(player1.UserID)
 			p2UUID, _ := uuid.Parse(player2.UserID)
 
-			scope := users.RatingScope{
-				Mode:        mode,
-				BoardSize:   actualBoardSize,
-				TimeLimitMs: timeLimit.Milliseconds(),
-			}
+			scope := users.BoardRatingScope(actualBoardSize, timeLimit.Milliseconds())
 			newR1, newR2, err := m.userRepo.ApplyRatingResult(p1UUID, p2UUID, scope, p1Score)
 			if err == nil {
 				player1.Rating = newR1
@@ -296,11 +292,7 @@ func (m *Matchmaker) loadScopedRating(client *ws.Client, key QueueKey) (int, err
 		return 0, ws.NewProtocolError(ws.ErrorCodeInvalidMessage, "Invalid user id", false)
 	}
 
-	rating, err := m.userRepo.GetOrCreateRating(userID, users.RatingScope{
-		Mode:        key.Mode,
-		BoardSize:   key.BoardSize,
-		TimeLimitMs: key.TimeLimit.Milliseconds(),
-	})
+	rating, err := m.userRepo.GetOrCreateRating(userID, users.BoardRatingScope(key.BoardSize, key.TimeLimit.Milliseconds()))
 	if err != nil {
 		log.Printf("Failed to load scoped rating for user %s: %v", client.UserID, err)
 		return 0, ws.NewProtocolError(ws.ErrorCodeQueueFailed, "Failed to load rating", true)

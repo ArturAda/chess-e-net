@@ -11,33 +11,69 @@ import (
 )
 
 type RegisterRequest struct {
-	Username string `json:"username" binding:"required,min=3"`
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
+	Username       string `json:"username" binding:"required,min=3,max=50"`
+	Email          string `json:"email" binding:"required,email,max=100"`
+	Password       string `json:"password" binding:"required,min=6,max=72"`
+	TurnstileToken string `json:"turnstile_token"`
 }
 
 type LoginRequest struct {
-	Email    string `json:"email" binding:"required,email"`
-	Password string `json:"password" binding:"required,min=6"`
+	Email    string `json:"email" binding:"required,email,max=100"`
+	Password string `json:"password" binding:"required,min=6,max=72"`
+}
+
+type VerifyEmailRequest struct {
+	Email string `json:"email" binding:"required,email,max=100"`
+	Code  string `json:"code" binding:"required,len=6,numeric"`
+}
+
+type ResendVerificationRequest struct {
+	Email string `json:"email" binding:"required,email,max=100"`
 }
 
 type Handler struct {
-	service Service
+	service         Service
+	captchaVerifier CaptchaVerifier
 }
 
 func NewHandler(service Service) *Handler {
-	return &Handler{service: service}
+	return NewHandlerWithCaptcha(service, NewTurnstileVerifierFromEnv())
+}
+
+func NewHandlerWithCaptcha(service Service, captchaVerifier CaptchaVerifier) *Handler {
+	return &Handler{
+		service:         service,
+		captchaVerifier: captchaVerifier,
+	}
 }
 
 func (h *Handler) SetupRoutes(router *gin.Engine) {
 	api := router.Group("/api")
 	{
+		api.GET("/config", h.Config)
 		api.POST("/register", h.Register)
 		api.POST("/login", h.Login)
+		api.POST("/verify-email", h.VerifyEmail)
+		api.POST("/resend-verification", h.ResendVerification)
 		api.GET("/me", h.Me)
 		api.GET("/me/ratings", h.MeRatings)
 		api.GET("/leaderboard", h.Leaderboard)
 	}
+}
+
+func (h *Handler) Config(c *gin.Context) {
+	enabled := h.captchaVerifier != nil && h.captchaVerifier.Enabled()
+	siteKey := ""
+	if h.captchaVerifier != nil {
+		siteKey = h.captchaVerifier.SiteKey()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"turnstile": gin.H{
+			"enabled":  enabled,
+			"site_key": siteKey,
+		},
+	})
 }
 
 func (h *Handler) Register(c *gin.Context) {
@@ -48,9 +84,25 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
+	if err := h.verifyCaptcha(c, req.TurnstileToken); err != nil {
+		if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrCaptchaInvalid) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Human verification failed"})
+			return
+		}
+
+		log.Printf("[ERROR] Captcha verification failure during registration: %v", err)
+		c.JSON(http.StatusBadGateway, gin.H{"error": "Human verification is unavailable"})
+		return
+	}
+
 	if err := h.service.Register(req.Username, req.Email, req.Password); err != nil {
 		if errors.Is(err, ErrUserExists) {
 			c.JSON(http.StatusConflict, gin.H{"error": "User already exists"})
+			return
+		}
+		if errors.Is(err, ErrEmailDelivery) {
+			log.Printf("[ERROR] Email delivery failure during registration: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Verification email could not be sent"})
 			return
 		}
 
@@ -64,7 +116,15 @@ func (h *Handler) Register(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusCreated, gin.H{"message": "User created successfully"})
+	c.JSON(http.StatusCreated, gin.H{"message": "User created. Check your email for the verification code."})
+}
+
+func (h *Handler) verifyCaptcha(c *gin.Context, token string) error {
+	if h.captchaVerifier == nil || !h.captchaVerifier.Enabled() {
+		return nil
+	}
+
+	return h.captchaVerifier.Verify(c.Request.Context(), token, c.ClientIP())
 }
 
 func (h *Handler) Login(c *gin.Context) {
@@ -79,6 +139,15 @@ func (h *Handler) Login(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, ErrInvalidCredentials) {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid email or password"})
+			return
+		}
+		if errors.Is(err, ErrEmailNotVerified) {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Email is not verified. New verification code sent."})
+			return
+		}
+		if errors.Is(err, ErrEmailDelivery) {
+			log.Printf("[ERROR] Email delivery failure during login verification resend: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Verification email could not be sent"})
 			return
 		}
 
@@ -96,6 +165,63 @@ func (h *Handler) Login(c *gin.Context) {
 		"token":   token,
 		"message": "Login successful",
 	})
+}
+
+func (h *Handler) VerifyEmail(c *gin.Context) {
+	var req VerifyEmailRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data: " + err.Error()})
+		return
+	}
+
+	if err := h.service.VerifyEmail(req.Email, req.Code); err != nil {
+		if errors.Is(err, ErrInvalidCode) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid verification code"})
+			return
+		}
+		if errors.Is(err, ErrCodeExpired) {
+			c.JSON(http.StatusGone, gin.H{"error": "Verification code expired"})
+			return
+		}
+		if errors.Is(err, ErrDatabase) {
+			log.Printf("[ERROR] Database failure during email verification: %v", err)
+		} else {
+			log.Printf("[ERROR] Unknown failure during email verification: %v", err)
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Email verified"})
+}
+
+func (h *Handler) ResendVerification(c *gin.Context) {
+	var req ResendVerificationRequest
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid data: " + err.Error()})
+		return
+	}
+
+	if err := h.service.ResendVerificationCode(req.Email); err != nil {
+		if errors.Is(err, ErrEmailDelivery) {
+			log.Printf("[ERROR] Email delivery failure during verification resend: %v", err)
+			c.JSON(http.StatusBadGateway, gin.H{"error": "Verification email could not be sent"})
+			return
+		}
+		if errors.Is(err, ErrDatabase) {
+			log.Printf("[ERROR] Database failure during verification resend: %v", err)
+		} else {
+			log.Printf("[ERROR] Unknown failure during verification resend: %v", err)
+		}
+
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Internal server error"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "If this email is registered and not verified, a new code was sent."})
 }
 
 func (h *Handler) Me(c *gin.Context) {
@@ -207,9 +333,6 @@ func ratingScopeFromQuery(c *gin.Context) (RatingScope, error) {
 		BoardSize:   boardSize,
 		TimeLimitMs: timeLimitMs,
 	})
-	if !isSupportedRatingScope(scope) {
-		return RatingScope{}, errors.New("unsupported rating scope")
-	}
 
 	return scope, nil
 }

@@ -4,6 +4,9 @@ import (
 	"chess-monolith/internal/users"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"strings"
 
 	"chess-monolith/pkg/jwtutil" // Замените yourname!
 
@@ -15,9 +18,63 @@ import (
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
-	CheckOrigin: func(r *http.Request) bool {
-		return true // TODO : В продакшене нужно проверять Origin для безопасности
-	},
+	CheckOrigin:     websocketOriginAllowed,
+}
+
+func websocketOriginAllowed(r *http.Request) bool {
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
+	if origin == "" {
+		return true
+	}
+
+	originURL, err := url.Parse(origin)
+	if err != nil || originURL.Scheme == "" || originURL.Host == "" {
+		return false
+	}
+
+	if strings.EqualFold(originURL.Host, r.Host) {
+		return true
+	}
+
+	for _, allowed := range websocketAllowedOrigins() {
+		if canonicalOrigin(allowed) == canonicalOrigin(origin) {
+			return true
+		}
+	}
+
+	return false
+}
+
+func websocketAllowedOrigins() []string {
+	raw := strings.TrimSpace(os.Getenv("ALLOWED_ORIGINS"))
+	if raw == "" {
+		return []string{
+			"http://localhost:5173",
+			"http://127.0.0.1:5173",
+			"http://localhost:8080",
+			"http://127.0.0.1:8080",
+		}
+	}
+
+	parts := strings.Split(raw, ",")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			result = append(result, part)
+		}
+	}
+
+	return result
+}
+
+func canonicalOrigin(origin string) string {
+	parsed, err := url.Parse(strings.TrimSpace(origin))
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return ""
+	}
+
+	return strings.ToLower(parsed.Scheme) + "://" + strings.ToLower(parsed.Host)
 }
 
 // ServeWS обрабатывает GET /ws запросы от браузера

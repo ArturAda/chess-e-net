@@ -4,6 +4,7 @@ import (
 	"chess-monolith/pkg/elo"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -15,6 +16,8 @@ type Repository interface {
 	CreateUser(user *User) error
 	GetUserByEmail(email string) (*User, error)
 	GetUserByID(id uuid.UUID) (*User, error)
+	UpdateEmailVerification(userID uuid.UUID, codeHash string, expiresAt time.Time) error
+	MarkEmailVerified(userID uuid.UUID, verifiedAt time.Time) error
 	UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error
 	GetOrCreateRating(userID uuid.UUID, scope RatingScope) (*UserRating, error)
 	ListRatingsForUser(userID uuid.UUID) ([]UserRating, error)
@@ -70,6 +73,44 @@ func (r *repository) GetUserByID(id uuid.UUID) (*User, error) {
 	}
 
 	return &user, nil
+}
+
+func (r *repository) UpdateEmailVerification(userID uuid.UUID, codeHash string, expiresAt time.Time) error {
+	result := r.db.Model(&User{}).
+		Where("id = ?", userID).
+		Updates(map[string]any{
+			"email_verified":                false,
+			"email_verification_code_hash":  codeHash,
+			"email_verification_expires_at": expiresAt,
+			"email_verified_at":             nil,
+		})
+	if result.Error != nil {
+		return ErrDatabase
+	}
+	if result.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
+}
+
+func (r *repository) MarkEmailVerified(userID uuid.UUID, verifiedAt time.Time) error {
+	result := r.db.Model(&User{}).
+		Where("id = ?", userID).
+		Updates(map[string]any{
+			"email_verified":                true,
+			"email_verification_code_hash":  "",
+			"email_verification_expires_at": nil,
+			"email_verified_at":             verifiedAt,
+		})
+	if result.Error != nil {
+		return ErrDatabase
+	}
+	if result.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }
 
 func (r *repository) UpdateRatings(user1ID, user2ID uuid.UUID, newRating1, newRating2 int) error {
@@ -166,6 +207,13 @@ func (r *repository) ApplyRatingResult(user1ID, user2ID uuid.UUID, scope RatingS
 				"rating":       newRating2,
 				"games_played": gorm.Expr("games_played + ?", 1),
 			}).Error; err != nil {
+			return ErrDatabase
+		}
+
+		if err := tx.Model(&User{}).Where("id = ?", user1ID).Update("rating", newRating1).Error; err != nil {
+			return ErrDatabase
+		}
+		if err := tx.Model(&User{}).Where("id = ?", user2ID).Update("rating", newRating2).Error; err != nil {
 			return ErrDatabase
 		}
 

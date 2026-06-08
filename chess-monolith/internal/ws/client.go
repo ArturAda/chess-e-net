@@ -155,6 +155,14 @@ func (c *Client) ReadPump() {
 
 			err = c.ActiveGame.MakeMoveWithPromotion(from, to, moveReq.Promotion)
 			if err != nil {
+				c.ActiveGame.Mu.Lock()
+				status := c.ActiveGame.Status
+				c.ActiveGame.Mu.Unlock()
+				if status != "active" {
+					c.ActiveGame.EndGame(status)
+					continue
+				}
+
 				code := ErrorCodeInvalidMove
 				recoverable := true
 				if err.Error() == "game is over" {

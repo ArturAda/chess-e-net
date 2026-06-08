@@ -9,13 +9,17 @@ import (
 
 // User - доменная модель пользователя
 type User struct {
-	ID           uuid.UUID `gorm:"type:uuid;primaryKey"`
-	Username     string    `gorm:"uniqueIndex;not null;size:50"`
-	Email        string    `gorm:"uniqueIndex;not null;size:100"`
-	PasswordHash string    `gorm:"not null"`
-	Rating       int       `gorm:"default:1200"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                         uuid.UUID `gorm:"type:uuid;primaryKey"`
+	Username                   string    `gorm:"uniqueIndex;not null;size:50"`
+	Email                      string    `gorm:"uniqueIndex;not null;size:100"`
+	PasswordHash               string    `gorm:"not null"`
+	Rating                     int       `gorm:"default:1200"`
+	EmailVerified              bool      `gorm:"not null;default:false"`
+	EmailVerificationCodeHash  string    `gorm:"size:255"`
+	EmailVerificationExpiresAt *time.Time
+	EmailVerifiedAt            *time.Time
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 // BeforeCreate хук для GORM, генерирует UUID перед записью в БД

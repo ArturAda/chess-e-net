@@ -4,10 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "vite",
+    "dev:lan": "vite --host 0.0.0.0",
     "build": "vite build && mkdir -p dist/js dist/images && cp -R js/. dist/js/ && cp -R images/. dist/images/",
     "preview": "vite preview"
   },
   "devDependencies": {
-    "vite": "^5.4.11"
+    "vite": "^8.0.16"
   }
 }

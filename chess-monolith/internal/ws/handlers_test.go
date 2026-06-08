@@ -22,6 +22,12 @@ func (d *DummyUserRepository) GetUserByEmail(_ string) (*users.User, error) { re
 func (d *DummyUserRepository) GetUserByID(_ uuid.UUID) (*users.User, error) {
 	return nil, nil
 }
+func (d *DummyUserRepository) UpdateEmailVerification(_ uuid.UUID, _ string, _ time.Time) error {
+	return nil
+}
+func (d *DummyUserRepository) MarkEmailVerified(_ uuid.UUID, _ time.Time) error {
+	return nil
+}
 func (d *DummyUserRepository) UpdateRatings(_, _ uuid.UUID, _, _ int) error {
 	return nil
 }
@@ -85,6 +91,35 @@ func TestServeWS_NoToken(t *testing.T) {
 	// Ожидаем 401 Unauthorized согласно логике хендлера
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 	assert.Contains(t, w.Body.String(), "Token is not provided")
+}
+
+func TestWebSocketOriginAllowed(t *testing.T) {
+	t.Setenv("ALLOWED_ORIGINS", "http://allowed.test")
+
+	tests := []struct {
+		name    string
+		host    string
+		origin  string
+		allowed bool
+	}{
+		{name: "no origin", host: "localhost:8080", origin: "", allowed: true},
+		{name: "same origin", host: "192.168.1.10:8080", origin: "http://192.168.1.10:8080", allowed: true},
+		{name: "allowlisted origin", host: "localhost:8080", origin: "http://allowed.test", allowed: true},
+		{name: "foreign origin", host: "localhost:8080", origin: "http://evil.test", allowed: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", "/ws", nil)
+			require.NoError(t, err)
+			req.Host = tt.host
+			if tt.origin != "" {
+				req.Header.Set("Origin", tt.origin)
+			}
+
+			assert.Equal(t, tt.allowed, websocketOriginAllowed(req))
+		})
+	}
 }
 
 func TestServeWS_InvalidToken(t *testing.T) {

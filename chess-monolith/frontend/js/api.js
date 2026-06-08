@@ -96,11 +96,20 @@ const ChessApi = (() => {
         }
     }
 
-    async function register({ username, email, password }) {
+    async function register({ username, email, password, turnstileToken = '' }) {
         return request('/register', {
             method: 'POST',
-            body: { username, email, password }
+            body: {
+                username,
+                email,
+                password,
+                turnstile_token: turnstileToken
+            }
         });
+    }
+
+    async function config() {
+        return request('/config');
     }
 
     async function login({ email, password }) {
@@ -115,6 +124,20 @@ const ChessApi = (() => {
 
         setToken(payload.token);
         return payload;
+    }
+
+    async function verifyEmail({ email, code }) {
+        return request('/verify-email', {
+            method: 'POST',
+            body: { email, code }
+        });
+    }
+
+    async function resendVerification({ email }) {
+        return request('/resend-verification', {
+            method: 'POST',
+            body: { email }
+        });
     }
 
     async function me() {
@@ -167,7 +190,19 @@ const ChessApi = (() => {
             }
             return SESSION_MESSAGE;
         }
-        if (error?.status === 403) return 'This action is not available for your account.';
+        if (error?.status === 403) {
+            if (/email.*not verified/i.test(message)) {
+                return 'A new verification code was sent. Check your email and enter it within 1 minute.';
+            }
+            return 'This action is not available for your account.';
+        }
+        if (error?.status === 410) return 'Verification code expired. Request a new code.';
+        if (error?.status === 502) {
+            if (/human verification/i.test(message)) {
+                return 'Human verification is unavailable. Try again in a moment.';
+            }
+            return 'Verification email could not be sent. Check SMTP settings or try again.';
+        }
         if (error?.status === 404) return 'The requested game was not found.';
         if (error?.status >= 500) return 'The game room is busy right now. Try again soon.';
         if (error?.status === 400 && TECHNICAL_MESSAGE_PATTERN.test(message)) {
@@ -187,8 +222,11 @@ const ChessApi = (() => {
 
     return {
         ApiError,
+        config,
         register,
         login,
+        verifyEmail,
+        resendVerification,
         me,
         listGames,
         getGame,

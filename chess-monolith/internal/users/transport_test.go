@@ -2,6 +2,7 @@ package users
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -27,6 +28,16 @@ func (m *MockService) Login(email, password string) (string, error) {
 	return args.String(0), args.Error(1)
 }
 
+func (m *MockService) VerifyEmail(email, code string) error {
+	args := m.Called(email, code)
+	return args.Error(0)
+}
+
+func (m *MockService) ResendVerificationCode(email string) error {
+	args := m.Called(email)
+	return args.Error(0)
+}
+
 func (m *MockService) GetCurrentUser(token string) (*UserProfile, error) {
 	args := m.Called(token)
 	if args.Get(0) == nil {
@@ -49,6 +60,50 @@ func (m *MockService) GetLeaderboard(scope RatingScope, limit int) (*Leaderboard
 		return nil, args.Error(1)
 	}
 	return args.Get(0).(*LeaderboardDTO), args.Error(1)
+}
+
+type fakeCaptchaVerifier struct {
+	enabled bool
+	siteKey string
+	err     error
+	token   string
+}
+
+func (v *fakeCaptchaVerifier) Enabled() bool { return v.enabled }
+func (v *fakeCaptchaVerifier) SiteKey() string {
+	return v.siteKey
+}
+func (v *fakeCaptchaVerifier) Verify(_ context.Context, token string, _ string) error {
+	v.token = token
+	return v.err
+}
+
+func TestHandler_Config_ReturnsTurnstilePublicSettings(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	handler := NewHandlerWithCaptcha(new(MockService), &fakeCaptchaVerifier{
+		enabled: true,
+		siteKey: "site-key",
+	})
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest(http.MethodGet, "/api/config", nil)
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Turnstile struct {
+			Enabled bool   `json:"enabled"`
+			SiteKey string `json:"site_key"`
+		} `json:"turnstile"`
+	}
+	assert.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.True(t, resp.Turnstile.Enabled)
+	assert.Equal(t, "site-key", resp.Turnstile.SiteKey)
 }
 
 func TestHandler_Register_Scenarios(t *testing.T) {
@@ -131,6 +186,65 @@ func TestHandler_Register_Scenarios(t *testing.T) {
 	}
 }
 
+func TestHandler_Register_RequiresCaptchaWhenEnabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockService := new(MockService)
+	captcha := &fakeCaptchaVerifier{
+		enabled: true,
+		siteKey: "site-key",
+		err:     ErrCaptchaRequired,
+	}
+	handler := NewHandlerWithCaptcha(mockService, captcha)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	body, _ := json.Marshal(RegisterRequest{
+		Username: "tester",
+		Email:    "test@mail.com",
+		Password: "password123",
+	})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/register", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.Empty(t, captcha.token)
+	mockService.AssertNotCalled(t, "Register", mock.Anything, mock.Anything, mock.Anything)
+}
+
+func TestHandler_Register_PassesCaptchaToken(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	mockService := new(MockService)
+	mockService.On("Register", "tester", "test@mail.com", "password123").Return(nil)
+	captcha := &fakeCaptchaVerifier{
+		enabled: true,
+		siteKey: "site-key",
+	}
+	handler := NewHandlerWithCaptcha(mockService, captcha)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	body, _ := json.Marshal(RegisterRequest{
+		Username:       "tester",
+		Email:          "test@mail.com",
+		Password:       "password123",
+		TurnstileToken: "turnstile-token",
+	})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/register", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+	assert.Equal(t, "turnstile-token", captcha.token)
+	mockService.AssertExpectations(t)
+}
+
 func TestHandler_Login_Scenarios(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -176,6 +290,28 @@ func TestHandler_Login_Scenarios(t *testing.T) {
 			expectedStatus: http.StatusInternalServerError,
 		},
 		{
+			name: "Email Not Verified",
+			request: LoginRequest{
+				Email:    "test@mail.com",
+				Password: "password123",
+			},
+			setupMock: func(mockService *MockService, request LoginRequest) {
+				mockService.On("Login", request.Email, request.Password).Return("", ErrEmailNotVerified)
+			},
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name: "Verification Email Delivery Failed",
+			request: LoginRequest{
+				Email:    "test@mail.com",
+				Password: "password123",
+			},
+			setupMock: func(mockService *MockService, request LoginRequest) {
+				mockService.On("Login", request.Email, request.Password).Return("", ErrEmailDelivery)
+			},
+			expectedStatus: http.StatusBadGateway,
+		},
+		{
 			name: "Invalid Email Validation",
 			request: LoginRequest{
 				Email:    "bad-email",
@@ -217,6 +353,102 @@ func TestHandler_Login_Scenarios(t *testing.T) {
 			mockService.AssertExpectations(t)
 		})
 	}
+}
+
+func TestHandler_VerifyEmail_Scenarios(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		request        VerifyEmailRequest
+		setupMock      func(mockService *MockService, request VerifyEmailRequest)
+		expectedStatus int
+	}{
+		{
+			name: "Success",
+			request: VerifyEmailRequest{
+				Email: "test@mail.com",
+				Code:  "123456",
+			},
+			setupMock: func(mockService *MockService, request VerifyEmailRequest) {
+				mockService.On("VerifyEmail", request.Email, request.Code).Return(nil)
+			},
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name: "Invalid Code",
+			request: VerifyEmailRequest{
+				Email: "test@mail.com",
+				Code:  "123456",
+			},
+			setupMock: func(mockService *MockService, request VerifyEmailRequest) {
+				mockService.On("VerifyEmail", request.Email, request.Code).Return(ErrInvalidCode)
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "Expired Code",
+			request: VerifyEmailRequest{
+				Email: "test@mail.com",
+				Code:  "123456",
+			},
+			setupMock: func(mockService *MockService, request VerifyEmailRequest) {
+				mockService.On("VerifyEmail", request.Email, request.Code).Return(ErrCodeExpired)
+			},
+			expectedStatus: http.StatusGone,
+		},
+		{
+			name: "Invalid Body",
+			request: VerifyEmailRequest{
+				Email: "bad-email",
+				Code:  "abc",
+			},
+			setupMock: func(mockService *MockService, request VerifyEmailRequest) {
+			},
+			expectedStatus: http.StatusBadRequest,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(MockService)
+			tt.setupMock(mockService, tt.request)
+
+			handler := NewHandler(mockService)
+			router := gin.Default()
+			handler.SetupRoutes(router)
+
+			body, _ := json.Marshal(tt.request)
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest("POST", "/api/verify-email", bytes.NewBuffer(body))
+			req.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
+func TestHandler_ResendVerification(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockService := new(MockService)
+	mockService.On("ResendVerificationCode", "test@mail.com").Return(nil)
+
+	handler := NewHandler(mockService)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	body, _ := json.Marshal(ResendVerificationRequest{Email: "test@mail.com"})
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("POST", "/api/resend-verification", bytes.NewBuffer(body))
+	req.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	mockService.AssertExpectations(t)
 }
 
 func TestHandler_Register_InvalidJSONBody(t *testing.T) {
@@ -465,7 +697,33 @@ func TestHandler_Leaderboard_Success(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
-func TestHandler_Leaderboard_InvalidScope(t *testing.T) {
+func TestHandler_Leaderboard_CustomScope(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	mockService := new(MockService)
+	handler := NewHandler(mockService)
+	router := gin.Default()
+	handler.SetupRoutes(router)
+
+	scope := RatingScope{
+		Mode:        "custom",
+		BoardSize:   9,
+		TimeLimitMs: 300000,
+	}
+	mockService.On("GetLeaderboard", scope, 50).Return(&LeaderboardDTO{
+		Scope:   ratingScopeDTO(scope),
+		Players: []LeaderboardEntryDTO{},
+	}, nil)
+
+	w := httptest.NewRecorder()
+	req, _ := http.NewRequest("GET", "/api/leaderboard?mode=custom&board_size=9&time_limit=5", nil)
+
+	router.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	mockService.AssertExpectations(t)
+}
+
+func TestHandler_Leaderboard_InvalidQuery(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockService := new(MockService)
 	handler := NewHandler(mockService)
@@ -473,7 +731,7 @@ func TestHandler_Leaderboard_InvalidScope(t *testing.T) {
 	handler.SetupRoutes(router)
 
 	w := httptest.NewRecorder()
-	req, _ := http.NewRequest("GET", "/api/leaderboard?mode=classic&board_size=9&time_limit=5", nil)
+	req, _ := http.NewRequest("GET", "/api/leaderboard?mode=classic&board_size=9&time_limit=0", nil)
 
 	router.ServeHTTP(w, req)
 

@@ -29,14 +29,21 @@ func (d *DummyGameRepo) ListGamesForUser(userID uuid.UUID) ([]game.Game, error) 
 func (d *DummyGameRepo) UpdateGame(id uuid.UUID, state, status, turn string) error { return nil }
 
 type DummyUserRepo struct {
-	Ratings map[uuid.UUID]int
+	Ratings       map[uuid.UUID]int
+	LoadedScopes  []users.RatingScope
+	AppliedScopes []users.RatingScope
 }
 
-func (d *DummyUserRepo) CreateUser(u *users.User) error                     { return nil }
-func (d *DummyUserRepo) GetUserByEmail(email string) (*users.User, error)   { return nil, nil }
-func (d *DummyUserRepo) GetUserByID(id uuid.UUID) (*users.User, error)      { return nil, nil }
+func (d *DummyUserRepo) CreateUser(u *users.User) error                   { return nil }
+func (d *DummyUserRepo) GetUserByEmail(email string) (*users.User, error) { return nil, nil }
+func (d *DummyUserRepo) GetUserByID(id uuid.UUID) (*users.User, error)    { return nil, nil }
+func (d *DummyUserRepo) UpdateEmailVerification(_ uuid.UUID, _ string, _ time.Time) error {
+	return nil
+}
+func (d *DummyUserRepo) MarkEmailVerified(_ uuid.UUID, _ time.Time) error   { return nil }
 func (d *DummyUserRepo) UpdateRatings(wID, lID uuid.UUID, wR, lR int) error { return nil }
-func (d *DummyUserRepo) GetOrCreateRating(userID uuid.UUID, _ users.RatingScope) (*users.UserRating, error) {
+func (d *DummyUserRepo) GetOrCreateRating(userID uuid.UUID, scope users.RatingScope) (*users.UserRating, error) {
+	d.LoadedScopes = append(d.LoadedScopes, scope)
 	rating := users.DefaultRating
 	if d.Ratings != nil {
 		if scopedRating, ok := d.Ratings[userID]; ok {
@@ -51,7 +58,8 @@ func (d *DummyUserRepo) ListRatingsForUser(_ uuid.UUID) ([]users.UserRating, err
 func (d *DummyUserRepo) ListLeaderboard(_ users.RatingScope, _ int) ([]users.LeaderboardEntry, error) {
 	return nil, nil
 }
-func (d *DummyUserRepo) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, _ users.RatingScope, _ float64) (int, int, error) {
+func (d *DummyUserRepo) ApplyRatingResult(_ uuid.UUID, _ uuid.UUID, scope users.RatingScope, _ float64) (int, int, error) {
+	d.AppliedScopes = append(d.AppliedScopes, scope)
 	return 1216, 1184, nil
 }
 
@@ -252,6 +260,30 @@ func TestMatchmaker_StartGameSupportsModernBoardSize(t *testing.T) {
 	assert.Equal(t, 10, statePayload.BoardSize)
 	assert.Equal(t, 10, statePayload.Board.Width)
 	assert.Equal(t, 10, statePayload.Board.Height)
+}
+
+func TestMatchmaker_RankedModernGameUsesDisplayedBoardRatingScope(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("modern10", &DummyMode{Size: 10})
+	userRepo := &DummyUserRepo{}
+	mm := NewMatchmaker(reg, &DummyGameRepo{}, userRepo)
+
+	c1 := &ws.Client{UserID: uuid.New().String(), Send: make(chan []byte, 10)}
+	c2 := &ws.Client{UserID: uuid.New().String(), Send: make(chan []byte, 10)}
+
+	mm.startGame(c1, c2, "modern10", 10, true, time.Minute)
+	require.NotNil(t, c1.ActiveGame)
+
+	c1.ActiveGame.EndGame("white_won")
+
+	require.Len(t, userRepo.AppliedScopes, 1)
+	assert.Equal(t, users.RatingScope{
+		Mode:        "classic",
+		BoardSize:   10,
+		TimeLimitMs: time.Minute.Milliseconds(),
+	}, userRepo.AppliedScopes[0])
+	assert.Equal(t, 1216, c1.Rating)
+	assert.Equal(t, 1184, c2.Rating)
 }
 
 func TestMatchmaker_RankedMatch_Success(t *testing.T) {

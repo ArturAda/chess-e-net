@@ -30,6 +30,14 @@ func supportedRatingScopes() []RatingScope {
 	return scopes
 }
 
+func BoardRatingScope(boardSize int, timeLimitMs int64) RatingScope {
+	return normalizeRatingScope(RatingScope{
+		Mode:        defaultRatingMode,
+		BoardSize:   boardSize,
+		TimeLimitMs: timeLimitMs,
+	})
+}
+
 func isSupportedRatingScope(scope RatingScope) bool {
 	scope = normalizeRatingScope(scope)
 	if scope.Mode != defaultRatingMode {
