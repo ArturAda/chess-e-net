@@ -128,6 +128,51 @@ func TestRepository_ListGamesForUser(t *testing.T) {
 	assert.True(t, games[1].IsRanked)
 }
 
+func TestRepository_ListGamesForUserExpiresStaleActiveGames(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	userID := uuid.New()
+	opponentID := uuid.New()
+
+	staleGame := &Game{
+		WhiteID:     userID,
+		BlackID:     opponentID,
+		Mode:        "classic",
+		TimeLimitMs: int64(time.Second / time.Millisecond),
+		Status:      "active",
+		Turn:        "white",
+		BoardState:  `{"moves":[]}`,
+		CreatedAt:   time.Now().Add(-10 * time.Minute),
+	}
+	freshGame := &Game{
+		WhiteID:     opponentID,
+		BlackID:     userID,
+		Mode:        "classic",
+		TimeLimitMs: int64(10 * time.Minute / time.Millisecond),
+		Status:      "active",
+		Turn:        "black",
+		BoardState:  `{"moves":[]}`,
+		CreatedAt:   time.Now(),
+	}
+
+	require.NoError(t, repo.CreateGame(staleGame))
+	require.NoError(t, repo.CreateGame(freshGame))
+
+	games, err := repo.ListGamesForUser(userID)
+	require.NoError(t, err)
+	require.Len(t, games, 2)
+
+	updatedStale, err := repo.GetGame(staleGame.ID)
+	require.NoError(t, err)
+	assert.Equal(t, StaleActiveGameStatus, updatedStale.Status)
+
+	updatedFresh, err := repo.GetGame(freshGame.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "active", updatedFresh.Status)
+}
+
 func TestRepository_GetGameForUser(t *testing.T) {
 	db := setupTestDB()
 	require.NotNil(t, db)

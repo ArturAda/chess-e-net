@@ -1,361 +1,3 @@
-const ASSET_ROOT = 'images';
-const PIECES_ROOT = `${ASSET_ROOT}/сhess_pieces`;
-const USER_STYLES_KEY = 'chessemag_user_styles';
-const USER_STYLES_VERSION = 2;
-const CURRENT_SETTINGS_KEY = 'chessemag_current_settings';
-const LEGACY_ACCOUNT_PROFILE_KEY = 'chessemag_account_profile';
-const ACCOUNT_AVATAR_SIZE = 256;
-const TIMER_ROOT = `${ASSET_ROOT}/timer`;
-const TIMER_DIGIT_ROOT = `${TIMER_ROOT}/digits`;
-const CUSTOM_DRAG_START_THRESHOLD = 5;
-const CUSTOM_DRAG_CLICK_SUPPRESS_MS = 250;
-const GAME_GENERIC_ERROR_MESSAGE = 'Something went wrong. Try again.';
-const GAME_CONNECTION_LOST_MESSAGE = 'Game connection was lost. Start search again.';
-const GAME_SETUP_PENDING_MESSAGE = 'The board is still setting up.';
-const GAME_TECHNICAL_MESSAGE_PATTERN = /\b(backend|websocket|jwt|localhost|authorization bearer|token|payload|json|queue manager|request failed|frontend|server error|message type|board_size)\b/i;
-const SOCKET_ERROR_MESSAGES = {
-    SOCKET_ERROR: 'Could not enter the match room. Try again.',
-    INVALID_SERVER_MESSAGE: 'The match room sent an unexpected update. Refresh the page if this repeats.',
-    INVALID_MESSAGE: 'The game did not understand that action. Try again.',
-    UNKNOWN_MESSAGE: 'This game action is not supported yet.',
-    UNKNOWN_MODE: 'This board mode is not available right now.',
-    QUEUE_FAILED: 'Matchmaking is unavailable right now. Try again soon.',
-    NOT_IN_GAME: 'This game is no longer active.',
-    NOT_YOUR_TURN: 'Wait for your turn.',
-    INVALID_MOVE: 'That move is not legal.',
-    GAME_ALREADY_OVER: 'This game is already finished.',
-    DRAW_OFFER_ACTIVE: 'A draw offer is already active.',
-    DRAW_OFFER_STATE: 'This draw offer is no longer available.',
-    INVALID_STICKER: 'This sticker is not available.',
-    INTERNAL_ERROR: 'The match room is busy right now. Try again soon.'
-};
-
-const PIECE_TYPES = ['P', 'R', 'N', 'B', 'Q', 'K'];
-const PIECE_NAMES = {
-    K: 'King',
-    Q: 'Queen',
-    R: 'Rook',
-    B: 'Bishop',
-    N: 'Horse',
-    P: 'Pawn'
-};
-const PIECE_LABELS = [
-    { code: 'P', title: 'Pawn' },
-    { code: 'R', title: 'Rook' },
-    { code: 'N', title: 'Knight' },
-    { code: 'B', title: 'Bishop' },
-    { code: 'Q', title: 'Queen' },
-    { code: 'K', title: 'King' }
-];
-
-function playerFacingGameMessage(message, fallback = GAME_GENERIC_ERROR_MESSAGE) {
-    const text = String(message || '').trim();
-    if (!text || GAME_TECHNICAL_MESSAGE_PATTERN.test(text)) {
-        return fallback;
-    }
-    return text;
-}
-
-function playerFacingErrorMessage(error, fallback = GAME_GENERIC_ERROR_MESSAGE) {
-    return playerFacingGameMessage(error?.message, fallback);
-}
-
-function playerFacingSocketMessage(payload, fallback = GAME_GENERIC_ERROR_MESSAGE) {
-    const code = payload?.code || '';
-    if (SOCKET_ERROR_MESSAGES[code]) {
-        return SOCKET_ERROR_MESSAGES[code];
-    }
-    return playerFacingGameMessage(payload?.message, fallback);
-}
-
-class PieceAssetStrategy {
-    constructor({ id, name, pieceType = null }) {
-        this.id = id;
-        this.name = name;
-        this.pieceType = pieceType;
-    }
-
-    getSrc() {
-        throw new Error('PieceAssetStrategy#getSrc must be implemented.');
-    }
-}
-
-class BuiltInPieceStyleStrategy extends PieceAssetStrategy {
-    constructor({ id, name, src }) {
-        super({ id, name });
-        this.src = src;
-    }
-
-    getSrc(piece) {
-        return this.src(piece);
-    }
-}
-
-class UploadedPieceVariantStrategy extends PieceAssetStrategy {
-    constructor({ id, name, pieceType, role = 'light', whiteSrc, blackSrc, src }) {
-        super({ id, name, pieceType });
-        this.role = role;
-        this.whiteSrc = whiteSrc || src || blackSrc;
-        this.blackSrc = blackSrc || src || whiteSrc;
-    }
-
-    getSrc(piece) {
-        return piece[0] === 'w' ? this.whiteSrc : this.blackSrc;
-    }
-}
-
-class SinglePieceImageStrategy extends PieceAssetStrategy {
-    constructor({ baseStrategy, pieceType, sourceColor }) {
-        super({
-            id: `${baseStrategy.id}-${pieceType}-${sourceColor === 'w' ? 'light' : 'dark'}`,
-            name: `${baseStrategy.name} ${sourceColor === 'w' ? 'Light' : 'Dark'}`,
-            pieceType
-        });
-        this.baseStrategy = baseStrategy;
-        this.sourceColor = sourceColor;
-    }
-
-    getSrc() {
-        return this.baseStrategy.getSrc(`${this.sourceColor}${this.pieceType}`);
-    }
-}
-
-class SquareAssetStrategy {
-    constructor({ id, name, color = '#f0d9b5' }) {
-        this.id = id;
-        this.name = name;
-        this.color = color;
-    }
-
-    getSrc() {
-        throw new Error('SquareAssetStrategy#getSrc must be implemented.');
-    }
-
-    getColor() {
-        return this.color;
-    }
-}
-
-class BuiltInSquareStrategy extends SquareAssetStrategy {
-    constructor({ id, name, src, color }) {
-        super({ id, name, color });
-        this.src = src;
-    }
-
-    getSrc() {
-        return this.src;
-    }
-}
-
-class UploadedSquareStrategy extends SquareAssetStrategy {
-    constructor({ id, name, src, color }) {
-        super({ id, name, color });
-        this.src = src;
-    }
-
-    getSrc() {
-        return this.src;
-    }
-}
-
-class BackgroundStrategy {
-    constructor({ id, name, previewClass }) {
-        this.id = id;
-        this.name = name;
-        this.previewClass = previewClass;
-    }
-
-    getPreviewClass() {
-        return this.previewClass;
-    }
-
-    apply() {
-        document.body.dataset.background = this.id;
-    }
-}
-
-class MatchmakingStrategy {
-    findMatch() {
-        throw new Error('MatchmakingStrategy#findMatch must be implemented.');
-    }
-
-    cancel() {
-        throw new Error('MatchmakingStrategy#cancel must be implemented.');
-    }
-}
-
-class WebSocketMatchmakingStrategy extends MatchmakingStrategy {
-    async findMatch({ mode, boardSize, timeControlMinutes, isRanked = false }) {
-        const token = window.ChessApi?.getToken?.();
-        if (!token) {
-            throw new Error('Log in before searching for a match.');
-        }
-
-        if (!window.ChessSocket) {
-            throw new Error('Game connection is still loading. Refresh the page and try again.');
-        }
-
-        await ChessSocket.connect(token);
-        ChessSocket.joinQueue({
-            mode,
-            boardSize,
-            isRanked,
-            timeControlMinutes,
-            visualState: buildCurrentVisualStatePayload()
-        });
-
-        return {
-            mode,
-            boardSize,
-            timeControlMinutes,
-            isRanked,
-            status: 'waiting',
-            message: `Searching for ${modeLabel(mode, boardSize)} · ${timeControlMinutes} min · ${isRanked ? 'ranked' : 'casual'}.`
-        };
-    }
-
-    cancel() {
-        window.ChessSocket?.cancelQueue?.();
-        return Promise.resolve({ status: 'cancelled' });
-    }
-}
-
-const matchmakingClient = new WebSocketMatchmakingStrategy();
-
-const builtInPieceStrategies = [
-    new BuiltInPieceStyleStrategy({
-        id: 'classic',
-        name: 'Classic',
-        src(piece) {
-            const color = piece[0] === 'w' ? 'White' : 'Black';
-            return `${PIECES_ROOT}/classic_chess/${color}_${PIECE_NAMES[piece[1]]}.png`;
-        }
-    }),
-    new BuiltInPieceStyleStrategy({
-        id: 'cheese',
-        name: 'Cheese',
-        src(piece) {
-            const color = piece[0] === 'w' ? 'White' : 'Black';
-            return `${PIECES_ROOT}/cheese_chess_alpha/${color}_${PIECE_NAMES[piece[1]]}_cheese.png`;
-        }
-    }),
-    new BuiltInPieceStyleStrategy({
-        id: 'cats',
-        name: 'Cats',
-        src(piece) {
-            const color = piece[0] === 'w' ? 'White' : 'Black';
-            const name = piece[1] === 'N' ? 'Knight' : PIECE_NAMES[piece[1]];
-            return `${PIECES_ROOT}/cats_gen/${color}_Cat_${name}.png`;
-        }
-    }),
-    new BuiltInPieceStyleStrategy({
-        id: 'cheese-mice-pixel',
-        name: 'Cheese Mice Pixel',
-        src(piece) {
-            const color = piece[0] === 'w' ? 'White' : 'Black';
-            return `${PIECES_ROOT}/cheese_mice_pixel/${color}_${PIECE_NAMES[piece[1]]}_cheese_mouse.png`;
-        }
-    }),
-    new BuiltInPieceStyleStrategy({
-        id: 'cheese-mice-svg',
-        name: 'Cheese Mice SVG',
-        src(piece) {
-            const color = piece[0] === 'w' ? 'White' : 'Black';
-            return `${PIECES_ROOT}/cheese_mice_svg/${color}_${PIECE_NAMES[piece[1]]}_cheese_mouse.svg`;
-        }
-    })
-];
-
-const builtInSquareStrategies = [
-    new BuiltInSquareStrategy({
-        id: 'yellow-square',
-        name: 'Yellow Square',
-        src: `${ASSET_ROOT}/squares/Yellow_Square.png`,
-        color: '#f2cf76'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'classic-green-square',
-        name: 'Classic Green',
-        src: `${ASSET_ROOT}/squares/Classic_Green.png`,
-        color: '#73b765'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'green-square',
-        name: 'Green Square',
-        src: `${ASSET_ROOT}/squares/Green_Square.png`,
-        color: '#9bcfbd'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'default-red-square',
-        name: 'Default Red',
-        src: `${ASSET_ROOT}/squares/Default_Red.png`,
-        color: '#e45b45'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'cheese-light-pixel',
-        name: 'Cheese Light Pixel',
-        src: `${ASSET_ROOT}/squares/cheese_board/Cheese_Light_pixel.png`,
-        color: '#eee2c6'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'cheese-dark-pixel',
-        name: 'Cheese Dark Pixel',
-        src: `${ASSET_ROOT}/squares/cheese_board/Cheese_Dark_pixel.png`,
-        color: '#624b32'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'cheese-light-svg',
-        name: 'Cheese Light SVG',
-        src: `${ASSET_ROOT}/squares/cheese_board/Cheese_Light.svg`,
-        color: '#f3ead2'
-    }),
-    new BuiltInSquareStrategy({
-        id: 'cheese-dark-svg',
-        name: 'Cheese Dark SVG',
-        src: `${ASSET_ROOT}/squares/cheese_board/Cheese_Dark.svg`,
-        color: '#6a5138'
-    })
-];
-
-const AMBIENT_SQUARE_IDS = ['yellow-square', 'classic-green-square', 'green-square', 'default-red-square'];
-let ambientResizeTimeoutId = null;
-let viewportResizeTimeoutId = null;
-let ambientPieceIntervalId = null;
-let ambientPieceTimeoutIds = [];
-let ambientGridSignature = '';
-const preloadedAssetImages = new Map();
-
-const backgroundStrategies = [
-    new BackgroundStrategy({
-        id: 'cozy-board',
-        name: 'Cozy Board',
-        previewClass: 'background-preview-cozy'
-    }),
-    new BackgroundStrategy({
-        id: 'dark-room',
-        name: 'Dark Room',
-        previewClass: 'background-preview-dark'
-    })
-];
-
-const emojiChatItems = [
-    { id: 'shark', name: 'Shark grin', src: `${ASSET_ROOT}/smiles/shark_grin.png` },
-    { id: 'bite', name: 'Lip bite', src: `${ASSET_ROOT}/smiles/lip_bite.png` },
-    { id: 'clown', name: 'Clown', src: `${ASSET_ROOT}/smiles/clown.png` },
-    { id: 'think', name: 'Thinking', src: `${ASSET_ROOT}/smiles/thinking.png` },
-    { id: 'cry', name: 'Crying', src: `${ASSET_ROOT}/smiles/crying.png` },
-    { id: 'thumb', name: 'Thumbs up', src: `${ASSET_ROOT}/smiles/thumbs_up.png` },
-    { id: 'cheese', name: 'Cheese grin', src: `${ASSET_ROOT}/smiles/cheese_grin.png` },
-    { id: 'crown', name: 'Crowned', src: `${ASSET_ROOT}/smiles/crowned.png` },
-    { id: 'dizzy', name: 'Dizzy', src: `${ASSET_ROOT}/smiles/dizzy.png` },
-    { id: 'fire', name: 'On fire', src: `${ASSET_ROOT}/smiles/on_fire.png` },
-    { id: 'sus', name: 'Suspicious', src: `${ASSET_ROOT}/smiles/suspicious.png` },
-    { id: 'sleep', name: 'Sleepy', src: `${ASSET_ROOT}/smiles/sleepy.png` },
-    { id: 'party', name: 'Party', src: `${ASSET_ROOT}/smiles/party.png` },
-    { id: 'cool', name: 'Cool', src: `${ASSET_ROOT}/smiles/cool.png` },
-    { id: 'rocket', name: 'Rocket mood', src: `${ASSET_ROOT}/smiles/rocket_mood.png` }
-];
-
 let historyRecords = [];
 const LEGACY_HISTORY_STORAGE_KEYS = [
     'chessemag_history',
@@ -414,6 +56,8 @@ let historyReplayBoard = null;
 let timerState = null;
 let timerIntervalId = null;
 let matchNotFoundTimeoutId = null;
+let gameFinishedOverlayDelayId = null;
+let gameFinishedRedirectTimeoutId = null;
 let settingsGalleryRendered = false;
 let emojiChatRendered = false;
 let emojiMessages = [];
@@ -421,6 +65,19 @@ let userStyles = loadUserStyles();
 let settings = loadCurrentSettings();
 let accountProfile = loadAccountProfile();
 let accountEditing = false;
+let accountAuthMode = 'login';
+let pendingVerificationEmail = '';
+let accountVerificationDeadlineMs = 0;
+let accountVerificationTimerId = null;
+let securityConfig = {
+    turnstile: {
+        enabled: false,
+        siteKey: ''
+    }
+};
+let turnstileScriptPromise = null;
+let turnstileWidgetId = null;
+let turnstileToken = '';
 
 document.addEventListener('DOMContentLoaded', () => {
     clearLegacyAccountProfile();
@@ -434,13 +91,13 @@ document.addEventListener('DOMContentLoaded', () => {
     bindSocketEvents();
     bindAccountForm();
     renderAccountProfile();
+    loadSecurityConfig();
     refreshAccountFromBackend();
     setAccountEntryVisibility('page-menu');
     setPageScrollMode('page-menu');
     applySelectedBackground();
     applySelectedBoardSquares();
     initAmbientBackground();
-    warmSettingsAssetCache();
     renderHistoryList();
 });
 
@@ -495,7 +152,6 @@ function navigateTo(pageId) {
     }
 
     if (pageId === 'page-settings') {
-        warmSettingsAssetCache();
         renderSettingsGallery();
     }
 
@@ -540,6 +196,7 @@ function initAmbientBackground() {
         window.clearTimeout(ambientResizeTimeoutId);
         ambientResizeTimeoutId = window.setTimeout(renderAmbientBoardLayer, 120);
     });
+    document.addEventListener('visibilitychange', applyFallingPiecesPreference);
 
     applyFallingPiecesPreference();
 }
@@ -548,9 +205,9 @@ function renderAmbientBoardLayer() {
     const layer = document.getElementById('ambient-board-layer');
     if (!layer) return;
 
-    const tileSize = window.innerWidth < 760 ? 72 : 96;
-    const columns = Math.ceil(window.innerWidth / tileSize) + 10;
-    const rows = Math.ceil(window.innerHeight / tileSize) + 10;
+    const tileSize = window.innerWidth < 760 ? 112 : 160;
+    const columns = Math.ceil(window.innerWidth / tileSize) + 4;
+    const rows = Math.ceil(window.innerHeight / tileSize) + 4;
     const total = columns * rows;
     const signature = `${tileSize}:${columns}:${rows}`;
     if (ambientGridSignature === signature && layer.childElementCount === total) return;
@@ -578,13 +235,13 @@ function renderAmbientBoardLayer() {
 
 function startFallingPieces() {
     const layer = document.getElementById('falling-pieces-layer');
-    if (!layer || ambientPieceIntervalId) return;
+    if (!layer || ambientPieceIntervalId || document.hidden) return;
 
-    for (let index = 0; index < 7; index += 1) {
-        const timeoutId = window.setTimeout(() => spawnFallingPiece(layer), index * 360);
+    for (let index = 0; index < FALLING_PIECE_INITIAL_COUNT; index += 1) {
+        const timeoutId = window.setTimeout(() => spawnFallingPiece(layer), index * 520);
         ambientPieceTimeoutIds.push(timeoutId);
     }
-    ambientPieceIntervalId = window.setInterval(() => spawnFallingPiece(layer), 850);
+    ambientPieceIntervalId = window.setInterval(() => spawnFallingPiece(layer), FALLING_PIECE_INTERVAL_MS);
 }
 
 function stopFallingPieces() {
@@ -600,8 +257,9 @@ function stopFallingPieces() {
 
 function applyFallingPiecesPreference() {
     const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const saveData = Boolean(navigator.connection?.saveData);
     const isSettingsPage = document.body.classList.contains('settings-page-active');
-    if (settings.fallingPiecesEnabled && !reduceMotion && !isSettingsPage) {
+    if (settings.fallingPiecesEnabled && !reduceMotion && !saveData && !isSettingsPage && !document.hidden) {
         startFallingPieces();
         return;
     }
@@ -611,7 +269,8 @@ function applyFallingPiecesPreference() {
 function spawnFallingPiece(layer) {
     if (!settings.fallingPiecesEnabled) return;
     if (document.body.classList.contains('settings-page-active')) return;
-    if (layer.childElementCount > 24) return;
+    if (document.hidden) return;
+    if (layer.childElementCount >= FALLING_PIECE_MAX_COUNT) return;
 
     const pieceColor = Math.random() > 0.45 ? 'w' : 'b';
     const pieceType = PIECE_TYPES[Math.floor(Math.random() * PIECE_TYPES.length)];
@@ -619,7 +278,7 @@ function spawnFallingPiece(layer) {
     piece.className = 'falling-piece';
     piece.src = getPieceSrc(`${pieceColor}${pieceType}`);
     piece.alt = '';
-    piece.style.setProperty('--fall-size', `${Math.round(42 + Math.random() * 42)}px`);
+    piece.style.setProperty('--fall-size', `${Math.round(34 + Math.random() * 30)}px`);
     piece.style.setProperty('--fall-x', `${Math.round(Math.random() * 100)}vw`);
     piece.style.setProperty('--fall-drift', `${Math.round(-80 + Math.random() * 160)}px`);
     piece.style.setProperty('--fall-duration', `${Math.round(13 + Math.random() * 11)}s`);
@@ -936,6 +595,7 @@ function resetClassicEntry() {
     cancelMatchmaking();
     stopGameTimer();
     hideMatchNotFoundOverlay();
+    hideGameFinishedOverlay();
     currentVisualBoardSize = null;
     currentTimeControlMinutes = null;
     currentGameMode = 'classic';
@@ -1052,6 +712,7 @@ function destroyBoard() {
 
 function startMatchmaking(boardSize, timeControlMinutes, mode = currentGameMode, isRanked = currentIsRanked) {
     setMatchmakingStatus('Searching...');
+    hideGameFinishedOverlay();
     activeMatchRequest = { mode, boardSize, timeControlMinutes, isRanked: Boolean(isRanked) };
     currentIsRanked = Boolean(isRanked);
     queuedForMatch = false;
@@ -1103,6 +764,7 @@ function cancelMatchmaking() {
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
     hidePromotionPicker();
+    hideGameFinishedOverlay();
     resetDrawOfferState();
     resetNetworkWarning();
 }
@@ -1154,6 +816,7 @@ function handleMatchFound(payload) {
     queuedClassicPositionUpdate = null;
     clearClassicMoveHighlights();
     hidePromotionPicker();
+    hideGameFinishedOverlay();
     resetDrawOfferState();
     resetNetworkWarning();
 
@@ -1208,7 +871,11 @@ function handleGameState(gameState) {
     if (status !== 'active') {
         resetDrawOfferState();
         resetNetworkWarning();
+        stopGameTimer();
+        refreshPostGameData();
+        scheduleGameFinishedOverlay(gameState);
     } else {
+        hideGameFinishedOverlay();
         renderDrawOfferControls();
         renderNetworkWarning();
     }
@@ -1703,7 +1370,7 @@ function startGameTimer(timeControlMinutes) {
         lastTickAt: Date.now()
     };
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
-    timerIntervalId = window.setInterval(tickGameTimer, 250);
+    timerIntervalId = window.setInterval(tickGameTimer, GAME_TIMER_TICK_MS);
 }
 
 function startServerGameTimer(gameState) {
@@ -1739,7 +1406,7 @@ function startServerGameTimer(gameState) {
     renderAllTimers(timerState.remaining.opponent, timerState.remaining.me);
 
     if (gameState.status === 'active') {
-        timerIntervalId = window.setInterval(tickGameTimer, 250);
+        timerIntervalId = window.setInterval(tickGameTimer, GAME_TIMER_TICK_MS);
     }
 }
 
@@ -1826,6 +1493,85 @@ function hideMatchNotFoundOverlay() {
     if (matchNotFoundTimeoutId) {
         window.clearTimeout(matchNotFoundTimeoutId);
         matchNotFoundTimeoutId = null;
+    }
+}
+
+function scheduleGameFinishedOverlay(gameState) {
+    if (!gameState || gameState.status === 'active') return;
+
+    clearGameFinishedOverlayTimers();
+    const message = gameFinishedMessage(gameState);
+
+    gameFinishedOverlayDelayId = window.setTimeout(() => {
+        gameFinishedOverlayDelayId = null;
+        showGameFinishedOverlay(message);
+
+        gameFinishedRedirectTimeoutId = window.setTimeout(() => {
+            gameFinishedRedirectTimeoutId = null;
+            navigateTo('page-menu');
+        }, 5000);
+    }, 500);
+}
+
+function showGameFinishedOverlay(message) {
+    const overlay = document.getElementById('game-finished-overlay');
+    if (!overlay) return;
+
+    overlay.textContent = message;
+    overlay.classList.remove('hidden');
+    setMatchmakingStatus('');
+}
+
+function hideGameFinishedOverlay() {
+    clearGameFinishedOverlayTimers();
+    const overlay = document.getElementById('game-finished-overlay');
+    if (overlay) {
+        overlay.classList.add('hidden');
+    }
+}
+
+function clearGameFinishedOverlayTimers() {
+    if (gameFinishedOverlayDelayId) {
+        window.clearTimeout(gameFinishedOverlayDelayId);
+        gameFinishedOverlayDelayId = null;
+    }
+    if (gameFinishedRedirectTimeoutId) {
+        window.clearTimeout(gameFinishedRedirectTimeoutId);
+        gameFinishedRedirectTimeoutId = null;
+    }
+}
+
+function gameFinishedMessage(gameState) {
+    const status = String(gameState?.status || '').toLowerCase();
+    if (status.includes('draw')) {
+        return 'Draw';
+    }
+
+    const playerColor = gameState?.player_color || currentPlayerColor;
+    const winnerColor = status.includes('white_won')
+        ? 'white'
+        : status.includes('black_won')
+            ? 'black'
+            : '';
+
+    if (!winnerColor || !playerColor) {
+        return 'Game finished';
+    }
+
+    if (winnerColor === playerColor) {
+        return 'You won';
+    }
+
+    return 'You lost';
+}
+
+function refreshPostGameData() {
+    refreshAccountFromBackend();
+    historyLoaded = false;
+    if (document.getElementById('page-rating')?.classList.contains('active')) {
+        loadRatingPage({ force: true });
+    } else {
+        ratingsState.leaderboard = null;
     }
 }
 
@@ -2596,10 +2342,13 @@ function renderHistoryMoveList(record, emptyMessage = 'No moves saved for this g
         });
 
         const number = document.createElement('span');
+        number.className = 'history-move-number';
         number.textContent = String(index + 1);
 
         const text = document.createElement('strong');
+        text.className = 'history-move-text';
         text.textContent = formatHistoryMove(move);
+        text.title = text.textContent;
 
         row.append(number, text);
         list.appendChild(row);
@@ -2613,6 +2362,7 @@ function resultLabel(result) {
     if (result === 'loss') return 'Loss';
     if (result === 'draw') return 'Draw';
     if (result === 'active') return 'Active';
+    if (result === 'abandoned') return 'Expired';
     return 'Unknown';
 }
 
@@ -2706,12 +2456,13 @@ function normalizeHistoryMoves(moves) {
 }
 
 function normalizeHistoryResult(result, status = '', playerColor = '') {
-    if (result === 'win' || result === 'loss' || result === 'draw' || result === 'active') {
+    if (result === 'win' || result === 'loss' || result === 'draw' || result === 'active' || result === 'abandoned') {
         return result;
     }
 
     const normalizedStatus = String(status || '');
     if (normalizedStatus === 'active') return 'active';
+    if (normalizedStatus === 'abandoned') return 'abandoned';
     if (normalizedStatus.includes('draw')) return 'draw';
 
     const whiteWon = normalizedStatus.startsWith('white_won');
@@ -2854,12 +2605,132 @@ function appendSystemEmojiMessage(text) {
     renderEmojiMessages();
 }
 
+async function loadSecurityConfig() {
+    if (!window.ChessApi?.config) return;
+
+    try {
+        const config = await ChessApi.config();
+        securityConfig = normalizeSecurityConfig(config);
+        renderTurnstileWidget();
+    } catch (error) {
+        securityConfig = normalizeSecurityConfig(null);
+        console.warn('Unable to load security config', error);
+    }
+}
+
+function normalizeSecurityConfig(config) {
+    const turnstile = config?.turnstile || {};
+    return {
+        turnstile: {
+            enabled: Boolean(turnstile.enabled),
+            siteKey: String(turnstile.site_key || turnstile.siteKey || '').trim()
+        }
+    };
+}
+
+function renderTurnstileWidget() {
+    const wrapper = document.getElementById('account-turnstile');
+    const host = document.getElementById('account-turnstile-widget');
+    if (!wrapper || !host) return;
+
+    const enabled = Boolean(securityConfig.turnstile.enabled && securityConfig.turnstile.siteKey);
+    wrapper.classList.toggle('hidden', !enabled);
+    if (!enabled) {
+        turnstileToken = '';
+        host.innerHTML = '';
+        turnstileWidgetId = null;
+        return;
+    }
+
+    loadTurnstileScript()
+        .then(() => {
+            if (!window.turnstile || turnstileWidgetId !== null) return;
+            turnstileWidgetId = window.turnstile.render(host, {
+                sitekey: securityConfig.turnstile.siteKey,
+                callback: token => {
+                    turnstileToken = token || '';
+                },
+                'expired-callback': () => {
+                    turnstileToken = '';
+                    resetTurnstileWidget();
+                },
+                'error-callback': () => {
+                    turnstileToken = '';
+                }
+            });
+        })
+        .catch(error => {
+            turnstileToken = '';
+            showAccountMessage('Human verification could not load. Try again.');
+            console.warn('Unable to load Turnstile', error);
+        });
+}
+
+function loadTurnstileScript() {
+    if (window.turnstile) {
+        return Promise.resolve();
+    }
+    if (turnstileScriptPromise) {
+        return turnstileScriptPromise;
+    }
+
+    turnstileScriptPromise = new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+        script.async = true;
+        script.defer = true;
+        script.onload = () => resolve();
+        script.onerror = () => reject(new Error('Turnstile script failed to load'));
+        document.head.appendChild(script);
+    });
+
+    return turnstileScriptPromise;
+}
+
+function resetTurnstileWidget() {
+    if (window.turnstile && turnstileWidgetId !== null) {
+        window.turnstile.reset(turnstileWidgetId);
+    }
+}
+
+function currentTurnstileToken() {
+    if (!securityConfig.turnstile.enabled) {
+        return '';
+    }
+    return turnstileToken || '';
+}
+
 function bindAccountForm() {
     const form = document.getElementById('account-form');
     const loginForm = document.getElementById('account-login-form');
+    const verifyForm = document.getElementById('account-verify-form');
+    const resendCodeButton = document.getElementById('account-resend-code-btn');
+    const showSignupButton = document.getElementById('account-show-signup-btn');
+    const showLoginButton = document.getElementById('account-show-login-btn');
+    const verifyBackLoginButton = document.getElementById('account-verify-back-login-btn');
     const profileAvatarInput = document.getElementById('account-profile-avatar-input');
     const refreshButton = document.getElementById('account-refresh-btn');
     const logoutButton = document.getElementById('account-logout-btn');
+
+    showSignupButton?.addEventListener('click', () => {
+        pendingVerificationEmail = '';
+        clearAccountVerificationTimer();
+        setAccountAuthMode('signup');
+        showAccountMessage('');
+    });
+
+    showLoginButton?.addEventListener('click', () => {
+        clearAccountVerificationTimer();
+        setAccountAuthMode('login');
+        showAccountMessage('');
+    });
+
+    verifyBackLoginButton?.addEventListener('click', () => {
+        pendingVerificationEmail = '';
+        clearAccountVerificationTimer();
+        setAccountAuthMode('login');
+        showAccountMessage('');
+    });
 
     form?.addEventListener('submit', async event => {
         event.preventDefault();
@@ -2873,21 +2744,44 @@ function bindAccountForm() {
             return;
         }
 
+        if (securityConfig.turnstile.enabled && !securityConfig.turnstile.siteKey) {
+            showAccountMessage('Human verification is not configured. Contact server admin.');
+            return;
+        }
+
+        const turnstileVerificationToken = currentTurnstileToken();
+        if (securityConfig.turnstile.enabled && !turnstileVerificationToken) {
+            showAccountMessage('Complete human verification before registering.');
+            return;
+        }
+
         try {
             setAccountFormsBusy(true);
             showAccountMessage('Creating account...');
-            await ChessApi.register({ username, email, password });
+            await ChessApi.register({
+                username,
+                email,
+                password,
+                turnstileToken: turnstileVerificationToken
+            });
 
             if (passwordInput) passwordInput.value = '';
             const loginEmail = document.getElementById('account-login-email');
             if (loginEmail) loginEmail.value = email;
+            const verifyEmail = document.getElementById('account-verify-email');
+            if (verifyEmail) verifyEmail.value = email;
 
+            pendingVerificationEmail = email;
+            setAccountAuthMode('verify', { render: false });
+            startAccountVerificationTimer();
             accountEditing = false;
             renderAccountProfile();
-            showAccountMessage('Account created. Log in with your email and password.');
+            showAccountMessage('Account created. Enter the 6-digit code from your email within 1 minute.');
         } catch (error) {
             showAccountMessage(getAccountErrorMessage(error));
+            resetTurnstileWidget();
         } finally {
+            turnstileToken = '';
             setAccountFormsBusy(false);
         }
     });
@@ -2912,6 +2806,7 @@ function bindAccountForm() {
             if (passwordInput) passwordInput.value = '';
             applyBackendAccountProfile(profile);
             resetHistoryState();
+            clearAccountVerificationTimer();
             accountEditing = false;
             renderAccountProfile();
             showAccountMessage('Logged in.');
@@ -2922,6 +2817,79 @@ function bindAccountForm() {
                 accountProfile = createEmptyAccountProfile();
                 renderAccountProfile();
             }
+            if (error?.status === 403) {
+                pendingVerificationEmail = email;
+                setAccountAuthMode('verify', { render: false });
+                startAccountVerificationTimer();
+                renderAccountProfile();
+            }
+            showAccountMessage(getAccountErrorMessage(error));
+        } finally {
+            setAccountFormsBusy(false);
+        }
+    });
+
+    verifyForm?.addEventListener('submit', async event => {
+        event.preventDefault();
+        const email = pendingVerificationEmail || document.getElementById('account-verify-email')?.value.trim() || '';
+        const codeInput = document.getElementById('account-verify-code');
+        const code = codeInput?.value.trim() || '';
+
+        if (!email || !code) {
+            showAccountMessage('Email and verification code are required.');
+            return;
+        }
+
+        try {
+            setAccountFormsBusy(true);
+            showAccountMessage('Verifying email...');
+            await ChessApi.verifyEmail({ email, code });
+
+            const loginEmail = document.getElementById('account-login-email');
+            if (loginEmail) loginEmail.value = email;
+            if (codeInput) codeInput.value = '';
+            pendingVerificationEmail = '';
+            clearAccountVerificationTimer();
+            setAccountAuthMode('login', { render: false });
+            renderAccountProfile();
+            showAccountMessage('Email verified. You can log in now.');
+        } catch (error) {
+            showAccountMessage(getAccountErrorMessage(error));
+            if (error?.status === 410) {
+                pendingVerificationEmail = '';
+                clearAccountVerificationTimer();
+                setAccountAuthMode('login', { render: false });
+                renderAccountProfile();
+            }
+        } finally {
+            setAccountFormsBusy(false);
+        }
+    });
+
+    resendCodeButton?.addEventListener('click', async () => {
+        const email = pendingVerificationEmail
+            || document.getElementById('account-verify-email')?.value.trim()
+            || document.getElementById('account-email')?.value.trim()
+            || document.getElementById('account-login-email')?.value.trim()
+            || '';
+
+        if (!email) {
+            showAccountMessage('Enter your email to resend the verification code.');
+            return;
+        }
+
+        try {
+            setAccountFormsBusy(true);
+            showAccountMessage('Sending verification code...');
+            await ChessApi.resendVerification({ email });
+            const verifyEmail = document.getElementById('account-verify-email');
+            if (verifyEmail) verifyEmail.value = email;
+            pendingVerificationEmail = email;
+            setAccountAuthMode('verify', { render: false });
+            startAccountVerificationTimer();
+            renderAccountProfile();
+            showAccountMessage('If this email is registered and not verified, a new code was sent. You have 1 minute.');
+        } catch (error) {
             showAccountMessage(getAccountErrorMessage(error));
         } finally {
             setAccountFormsBusy(false);
@@ -2974,10 +2942,14 @@ function bindAccountForm() {
         classicSnapbackInProgress = false;
         queuedClassicPositionUpdate = null;
         clearClassicMoveHighlights();
+        hideGameFinishedOverlay();
         resetDrawOfferState();
         resetNetworkWarning();
         resetRatingState();
         accountEditing = false;
+        pendingVerificationEmail = '';
+        clearAccountVerificationTimer();
+        accountAuthMode = 'login';
         renderAccountProfile();
         showAccountMessage('Logged out.');
     });
@@ -2996,23 +2968,29 @@ function renderAccountProfile() {
     const email = document.getElementById('account-email');
     const password = document.getElementById('account-password');
     const loginPassword = document.getElementById('account-login-password');
+    const verifyEmail = document.getElementById('account-verify-email');
+    const verifyCode = document.getElementById('account-verify-code');
     const chip = document.getElementById('account-chip');
     const authPanel = document.getElementById('account-auth-panel');
     const loginForm = document.getElementById('account-login-form');
+    const registerForm = document.getElementById('account-form');
+    const verifyForm = document.getElementById('account-verify-form');
     const accountFormTitle = document.getElementById('account-form-title');
     const accountSubmitButton = document.getElementById('account-submit-btn');
     const profilePanel = document.getElementById('account-profile-panel');
     const profileName = document.getElementById('account-profile-name');
     const profileEmail = document.getElementById('account-profile-email');
-    const profileRating = document.getElementById('account-profile-rating');
+    const profileEmailStatus = document.getElementById('account-profile-email-status');
 
     const shouldShowProfile = accountProfile.signedIn;
 
     if (shouldShowProfile) {
+        pendingVerificationEmail = '';
         if (username) username.value = '';
         if (email) email.value = '';
         if (password) password.value = '';
         if (loginPassword) loginPassword.value = '';
+        if (verifyCode) verifyCode.value = '';
     }
     if (accountFormTitle) accountFormTitle.textContent = 'Register';
     if (accountSubmitButton) accountSubmitButton.textContent = 'Register';
@@ -3024,15 +3002,65 @@ function renderAccountProfile() {
     }
 
     authPanel?.classList.toggle('hidden', shouldShowProfile);
-    loginForm?.classList.toggle('hidden', shouldShowProfile);
+    loginForm?.classList.toggle('hidden', shouldShowProfile || accountAuthMode !== 'login');
+    registerForm?.classList.toggle('hidden', shouldShowProfile || accountAuthMode !== 'signup');
+    verifyForm?.classList.toggle('hidden', shouldShowProfile || accountAuthMode !== 'verify');
     profilePanel?.classList.toggle('hidden', !shouldShowProfile);
+
+    if (verifyEmail) verifyEmail.value = pendingVerificationEmail;
+    renderAccountVerificationCountdown();
 
     renderAccountAvatar('account-profile-avatar', 'account-profile-avatar-fallback', accountProfile.avatarSrc, accountInitial());
 
     if (profileName) profileName.textContent = accountProfile.username || 'Player';
     if (profileEmail) profileEmail.textContent = accountProfile.email || '-';
-    if (profileRating) profileRating.textContent = formatAccountPrimaryRating();
+    if (profileEmailStatus) profileEmailStatus.textContent = accountProfile.emailVerified ? 'Verified' : 'Not verified';
     renderAccountRatings();
+}
+
+function startAccountVerificationTimer() {
+    clearAccountVerificationTimer();
+    accountVerificationDeadlineMs = Date.now() + ACCOUNT_VERIFICATION_SECONDS * 1000;
+    renderAccountVerificationCountdown();
+    accountVerificationTimerId = window.setInterval(renderAccountVerificationCountdown, 1000);
+}
+
+function clearAccountVerificationTimer() {
+    if (accountVerificationTimerId) {
+        window.clearInterval(accountVerificationTimerId);
+        accountVerificationTimerId = null;
+    }
+    accountVerificationDeadlineMs = 0;
+    renderAccountVerificationCountdown();
+}
+
+function renderAccountVerificationCountdown() {
+    const countdown = document.getElementById('account-verify-countdown');
+    if (!countdown) return;
+
+    if (accountAuthMode !== 'verify' || !accountVerificationDeadlineMs) {
+        countdown.textContent = '';
+        return;
+    }
+
+    const remainingSeconds = Math.max(0, Math.ceil((accountVerificationDeadlineMs - Date.now()) / 1000));
+    if (remainingSeconds <= 0) {
+        clearAccountVerificationTimer();
+        pendingVerificationEmail = '';
+        setAccountAuthMode('login', { render: false });
+        renderAccountProfile();
+        showAccountMessage('Verification time expired. Log in again or request a new code.');
+        return;
+    }
+
+    countdown.textContent = `Confirm your account within ${remainingSeconds}s.`;
+}
+
+function setAccountAuthMode(mode, { render = true } = {}) {
+    accountAuthMode = ['login', 'signup', 'verify'].includes(mode) ? mode : 'login';
+    if (render) {
+        renderAccountProfile();
+    }
 }
 
 function createEmptyAccountProfile() {
@@ -3043,6 +3071,7 @@ function createEmptyAccountProfile() {
         avatarSrc: '',
         rating: '-',
         ratings: [],
+        emailVerified: false,
         registered: false,
         signedIn: false
     };
@@ -3057,6 +3086,7 @@ function applyBackendAccountProfile(profile) {
         avatarSrc: accountProfile.avatarSrc || '',
         rating: profile?.rating ?? '-',
         ratings,
+        emailVerified: Boolean(profile?.email_verified ?? profile?.emailVerified),
         registered: true,
         signedIn: true
     };
@@ -3074,17 +3104,6 @@ function normalizeRatingList(ratings = []) {
             gamesPlayed: Number(rating.games_played || rating.gamesPlayed || 0)
         }))
         .filter(rating => rating.boardSize && rating.timeLimitMinutes);
-}
-
-function formatAccountPrimaryRating() {
-    const rating = accountProfile.rating;
-    if (rating !== undefined && rating !== null && rating !== '-') {
-        return String(rating);
-    }
-
-    const playedRatings = accountProfile.ratings.filter(item => item.gamesPlayed > 0);
-    if (playedRatings.length === 0) return '-';
-    return String(Math.max(...playedRatings.map(item => item.rating)));
 }
 
 function renderAccountRatings() {
@@ -3121,6 +3140,7 @@ async function refreshAccountFromBackend({ showMessages = false } = {}) {
     if (!window.ChessApi?.hasToken?.()) {
         resetHistoryState();
         accountProfile = createEmptyAccountProfile();
+        clearAccountVerificationTimer();
         renderAccountProfile();
         return false;
     }
@@ -3143,6 +3163,7 @@ async function refreshAccountFromBackend({ showMessages = false } = {}) {
             ChessApi.clearToken();
             resetHistoryState();
             accountProfile = createEmptyAccountProfile();
+            clearAccountVerificationTimer();
             renderAccountProfile();
             showAccountMessage(showMessages ? 'Session expired. Log in again.' : '');
             return false;
@@ -4142,7 +4163,6 @@ function createPieceUploadButton(piece, nameInput) {
             const variant = await createUserPieceVariant(piece.code, file, nameInput.value.trim());
             userStyles.pieceVariants.push(variant);
             persistUserStyles();
-            warmSettingsAssetCache();
             renderSettingsGallery();
             showSettingsMessage(`Piece variant saved: ${variant.name}`);
         } catch (error) {
@@ -4314,7 +4334,6 @@ function createSquareUploadOption() {
             const variant = await createUserSquareVariant(file, nameInput.value.trim());
             userStyles.squareVariants.push(variant);
             persistUserStyles();
-            warmSettingsAssetCache();
             selectSquareStrategy('light', variant.id);
             showSettingsMessage(`Square variant saved: ${variant.name}`);
         } catch (error) {
@@ -4367,41 +4386,11 @@ function createAssetSection({ title, iconSrc, squareSrc, backgroundPreviewClass 
     return section;
 }
 
-function warmSettingsAssetCache() {
-    const urls = new Set();
-
-    getAllPieceStrategies().forEach(strategy => {
-        PIECE_TYPES.forEach(type => {
-            urls.add(strategy.getSrc(`w${type}`));
-            urls.add(strategy.getSrc(`b${type}`));
-        });
-    });
-
-    getAllSquareStrategies().forEach(strategy => {
-        urls.add(strategy.getSrc());
-    });
-
-    urls.forEach(preloadAssetUrl);
-}
-
-function preloadAssetUrl(src) {
-    if (!src || preloadedAssetImages.has(src)) return;
-
-    const image = new Image();
-    image.loading = 'eager';
-    image.decoding = 'sync';
-    image.fetchPriority = 'high';
-    preloadedAssetImages.set(src, image);
-    image.src = src;
-    image.decode?.().catch(() => {});
-}
-
 function configurePreviewImage(image, src) {
     image.alt = '';
-    image.loading = 'eager';
-    image.decoding = 'sync';
-    image.fetchPriority = 'high';
-    preloadAssetUrl(src);
+    image.loading = 'lazy';
+    image.decoding = 'async';
+    image.fetchPriority = 'low';
     image.src = src;
 }
 
@@ -4684,6 +4673,7 @@ function loadCurrentSettings() {
         const parsed = JSON.parse(localStorage.getItem(CURRENT_SETTINGS_KEY));
         if (!parsed) return defaults;
 
+        const isCurrentSettingsVersion = parsed.version === CURRENT_SETTINGS_VERSION;
         const migratedPieceStyle = parsed.pieceStyleId || 'classic';
         const lightPieceStrategyByType = { ...defaults.lightPieceStrategyByType };
         const darkPieceStrategyByType = { ...defaults.darkPieceStrategyByType };
@@ -4694,12 +4684,15 @@ function loadCurrentSettings() {
         });
 
         return {
+            version: CURRENT_SETTINGS_VERSION,
             lightPieceStrategyByType,
             darkPieceStrategyByType,
             lightSquareStrategyId: parsed.lightSquareStrategyId || parsed.lightSquareStyleId || parsed.boardStyleId || defaults.lightSquareStrategyId,
             darkSquareStrategyId: parsed.darkSquareStrategyId || parsed.darkSquareStyleId || parsed.boardStyleId || defaults.darkSquareStrategyId,
             backgroundStrategyId: parsed.backgroundStrategyId || defaults.backgroundStrategyId,
-            fallingPiecesEnabled: typeof parsed.fallingPiecesEnabled === 'boolean' ? parsed.fallingPiecesEnabled : defaults.fallingPiecesEnabled
+            fallingPiecesEnabled: isCurrentSettingsVersion && typeof parsed.fallingPiecesEnabled === 'boolean'
+                ? parsed.fallingPiecesEnabled
+                : defaults.fallingPiecesEnabled
         };
     } catch {
         return defaults;
@@ -4715,6 +4708,7 @@ function normalizeLoadedPieceStrategyId(strategyId, pieceType, kind) {
 
 function defaultSettings() {
     return {
+        version: CURRENT_SETTINGS_VERSION,
         lightPieceStrategyByType: PIECE_TYPES.reduce((result, type) => {
             result[type] = defaultPieceStrategyId(type, 'light');
             return result;
@@ -4726,7 +4720,7 @@ function defaultSettings() {
         lightSquareStrategyId: 'yellow-square',
         darkSquareStrategyId: 'classic-green-square',
         backgroundStrategyId: 'cozy-board',
-        fallingPiecesEnabled: true
+        fallingPiecesEnabled: false
     };
 }
 
@@ -4734,6 +4728,7 @@ function normalizeSettings() {
     const pieceIds = getAllPieceStrategies().map(strategy => strategy.id);
     const squareIds = getAllSquareStrategies().map(strategy => strategy.id);
     const backgroundIds = backgroundStrategies.map(strategy => strategy.id);
+    settings.version = CURRENT_SETTINGS_VERSION;
     settings.lightPieceStrategyByType ||= {};
     settings.darkPieceStrategyByType ||= {};
 
@@ -4765,7 +4760,7 @@ function normalizeSettings() {
     }
 
     if (typeof settings.fallingPiecesEnabled !== 'boolean') {
-        settings.fallingPiecesEnabled = true;
+        settings.fallingPiecesEnabled = false;
     }
 
     saveCurrentSettings();

@@ -34,7 +34,7 @@ body {
         radial-gradient(circle at 50% 94%, rgba(156, 119, 219, 0.24), transparent 38%),
         linear-gradient(135deg, #24192a, #2f4b3a 48%, #6a4a28);
     background-size: 150% 150%;
-    animation: cozy-background-shift 18s ease-in-out infinite alternate;
+    background-position: center;
 }
 
 body.no-page-scroll {
@@ -68,7 +68,6 @@ body::before {
         linear-gradient(135deg, rgba(255,214,132,0.14), transparent 42%, rgba(105,192,156,0.2));
     opacity: 0.9;
     transform: translate3d(-1%, -1%, 0) rotate(-4deg);
-    animation: cozy-light-sweep 30s ease-in-out infinite alternate;
 }
 
 body::after {
@@ -144,14 +143,13 @@ body.viewport-resizing[data-background="dark-room"]::after {
 }
 
 .ambient-board-layer {
-    inset: -22vh -18vw;
+    inset: -14vh -12vw;
     display: grid;
     grid-auto-rows: var(--ambient-square-size, 96px);
-    opacity: 0.23;
+    opacity: 0.18;
     filter: saturate(1.15) brightness(0.95);
     mix-blend-mode: soft-light;
-    transform: rotate(-5deg) scale(1.28);
-    animation: ambient-board-float 28s ease-in-out infinite alternate;
+    transform: rotate(-5deg) scale(1.16);
 }
 
 body[data-background="dark-room"] .ambient-board-layer {
@@ -222,6 +220,17 @@ body[data-background="dark-room"] .falling-piece {
     100% {
         opacity: 0;
         transform: translate3d(calc(var(--fall-x) + var(--fall-drift)), 112vh, 0) rotate(var(--fall-rotate-end));
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.001ms !important;
     }
 }
 
@@ -946,7 +955,7 @@ body[data-background="dark-room"] .game-title::after {
 }
 
 .account-panel {
-    width: min(780px, 100%);
+    width: min(460px, 100%);
     margin: 0 auto;
 }
 
@@ -957,7 +966,7 @@ body[data-background="dark-room"] .game-title::after {
 
 .account-auth-panel {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    grid-template-columns: 1fr;
     gap: 16px;
     align-items: start;
 }
@@ -995,6 +1004,52 @@ body[data-background="dark-room"] .game-title::after {
 
 .account-form input {
     padding: 10px;
+}
+
+.account-auth-switch,
+.account-form-copy {
+    margin: 0;
+    color: rgba(236,240,241,0.78);
+    font-size: 14px;
+    line-height: 1.45;
+    text-align: center;
+}
+
+.account-form-copy {
+    text-align: left;
+}
+
+.account-turnstile {
+    display: grid;
+    place-items: center;
+    min-height: 70px;
+}
+
+.account-verify-countdown {
+    margin: 0;
+    color: #8dfcff;
+    font-size: 18px;
+    font-weight: 900;
+    text-align: center;
+    text-shadow: 0 0 10px rgba(141,252,255,0.38);
+}
+
+.account-link-button {
+    display: inline;
+    padding: 0;
+    border: 0;
+    color: #8dfcff;
+    background: transparent;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 900;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+}
+
+.account-link-button:hover,
+.account-link-button:focus-visible {
+    color: #f7dc6f;
 }
 
 .account-profile-avatar {
@@ -1516,51 +1571,58 @@ body[data-background="dark-room"] .game-title::after {
 }
 
 .history-move-list {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 6px;
     align-content: start;
     max-height: min(46vh, 420px);
+    min-height: 0;
     overflow-y: auto;
+    padding-right: 4px;
 }
 
 .history-move-row {
     display: grid;
-    grid-template-columns: 36px minmax(0, 1fr);
-    gap: 8px;
+    grid-template-columns: 34px minmax(0, 1fr);
+    gap: 10px;
     align-items: start;
     min-height: 0;
     height: auto;
-    padding: 8px 10px;
+    flex: 0 0 auto;
+    padding: 9px 10px;
     border-radius: 6px;
     background: rgba(255,255,255,0.07);
     border: 1px solid transparent;
     cursor: pointer;
     text-align: left;
-    transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 
 .history-move-row:hover,
 .history-move-row.active {
     border-color: rgba(247,220,111,0.72);
     background: rgba(247,220,111,0.14);
-    transform: translateY(-1px);
 }
 
-.history-move-row span {
+.history-move-number {
     color: #8dfcff;
     font-weight: 900;
     line-height: 1.35;
     padding-top: 1px;
+    text-align: right;
+    white-space: nowrap;
 }
 
-.history-move-row strong {
+.history-move-text {
     color: #ecf0f1;
     display: block;
     min-width: 0;
+    max-width: 100%;
     line-height: 1.35;
     white-space: normal;
-    overflow-wrap: break-word;
-    word-break: break-word;
+    overflow-wrap: anywhere;
+    word-break: normal;
+    hyphens: auto;
 }
 
 .history-moves-empty {
@@ -1856,7 +1918,8 @@ body > .piece-417db {
     height: 1px;
 }
 
-.match-not-found-overlay {
+.match-not-found-overlay,
+.game-finished-overlay {
     position: fixed;
     inset: 0;
     z-index: 8;
@@ -1869,6 +1932,11 @@ body > .piece-417db {
     font-weight: 900;
     text-align: center;
     text-shadow: 0 0 18px rgba(255,119,223,0.55), 0 4px 0 rgba(0,0,0,0.38);
+}
+
+.game-finished-overlay {
+    background: rgba(8, 16, 32, 0.78);
+    text-shadow: 0 0 20px rgba(141, 252, 255, 0.62), 0 4px 0 rgba(0, 0, 0, 0.42);
 }
 
 .classic-toolbar {

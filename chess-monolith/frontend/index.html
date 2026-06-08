@@ -7,7 +7,7 @@
     <meta name="description" content="Legendary Chess Game">
     <link rel="icon" type="image/png" href="images/title/Chess_Title.png">
     <link rel="stylesheet" href="css/chessboard-1.0.0.min.css">
-    <link rel="stylesheet" href="css/style.css?v=20260607-history-errors">
+    <link rel="stylesheet" href="css/style.css?v=20260608-history-overlap">
 </head>
 
 <body class="no-page-scroll">
@@ -87,19 +87,23 @@
     <div id="page-account" class="page">
         <h2>Account</h2>
         <section id="account-auth-panel" class="account-panel account-auth-panel">
-            <form id="account-login-form" class="account-form account-login-form hidden">
+            <form id="account-login-form" class="account-form account-login-form">
                 <h3>Login</h3>
                 <label>
                     Email
-                    <input id="account-login-email" type="email" placeholder="player@example.com" autocomplete="email" required>
+                    <input id="account-login-email" type="email" maxlength="100" placeholder="player@example.com" autocomplete="email" required>
                 </label>
                 <label>
                     Password
-                    <input id="account-login-password" type="password" minlength="6" maxlength="40" placeholder="Password" autocomplete="current-password" required>
+                    <input id="account-login-password" type="password" minlength="6" maxlength="72" placeholder="Password" autocomplete="current-password" required>
                 </label>
                 <button class="mini-action-btn" type="submit">Login</button>
+                <p class="account-auth-switch">
+                    Not registered yet?
+                    <button id="account-show-signup-btn" class="account-link-button" type="button">Sign up</button>
+                </p>
             </form>
-            <form id="account-form" class="account-form">
+            <form id="account-form" class="account-form hidden">
                 <h3 id="account-form-title">Register</h3>
                 <label>
                     Username
@@ -107,13 +111,38 @@
                 </label>
                 <label>
                     Email
-                    <input id="account-email" type="email" placeholder="player@example.com" autocomplete="email" required>
+                    <input id="account-email" type="email" maxlength="100" placeholder="player@example.com" autocomplete="email" required>
                 </label>
                 <label>
                     Password
-                    <input id="account-password" type="password" minlength="6" maxlength="40" placeholder="Password" autocomplete="new-password" required>
+                    <input id="account-password" type="password" minlength="6" maxlength="72" placeholder="Password" autocomplete="new-password" required>
                 </label>
+                <div id="account-turnstile" class="account-turnstile hidden">
+                    <div id="account-turnstile-widget"></div>
+                </div>
                 <button id="account-submit-btn" class="mini-action-btn" type="submit">Register</button>
+                <p class="account-auth-switch">
+                    Already have an account?
+                    <button id="account-show-login-btn" class="account-link-button" type="button">Login</button>
+                </p>
+            </form>
+            <form id="account-verify-form" class="account-form account-verify-form hidden">
+                <h3>Verify Email</h3>
+                <p class="account-form-copy">
+                    We sent a 6-digit code to your email.
+                </p>
+                <p id="account-verify-countdown" class="account-verify-countdown"></p>
+                <input id="account-verify-email" type="hidden">
+                <label>
+                    Verification Code
+                    <input id="account-verify-code" type="text" inputmode="numeric" pattern="[0-9]{6}" minlength="6" maxlength="6" placeholder="123456" autocomplete="one-time-code" required>
+                </label>
+                <button id="account-verify-submit-btn" class="mini-action-btn" type="submit">Verify Email</button>
+                <button id="account-resend-code-btn" class="mini-action-btn" type="button">Resend Code</button>
+                <p class="account-auth-switch">
+                    Wrong account?
+                    <button id="account-verify-back-login-btn" class="account-link-button" type="button">Back to login</button>
+                </p>
             </form>
         </section>
         <section id="account-profile-panel" class="account-profile hidden">
@@ -135,8 +164,8 @@
                     <strong id="account-profile-email"></strong>
                 </div>
                 <div class="account-profile-row">
-                    <span>Rating</span>
-                    <strong id="account-profile-rating">-</strong>
+                    <span>Email Status</span>
+                    <strong id="account-profile-email-status"></strong>
                 </div>
             </div>
             <div id="account-ratings-list" class="account-ratings-list"></div>
@@ -358,12 +387,16 @@
         <div id="match-not-found-overlay" class="match-not-found-overlay hidden" role="status" aria-live="assertive">
             Sorry, match was not found
         </div>
+        <div id="game-finished-overlay" class="game-finished-overlay hidden" role="status" aria-live="assertive">
+            Game finished
+        </div>
     </div>
 
     <script src="js/jquery-3.6.0.min.js?v=20260607-frontend-sync"></script>
     <script src="js/chessboard-1.0.0.min.js?v=20260607-frontend-sync"></script>
-    <script src="js/api.js?v=20260607-history-errors"></script>
+    <script src="js/api.js?v=20260608-security"></script>
     <script src="js/socket.js?v=20260607-history-errors"></script>
-    <script src="js/lobby.js?v=20260607-history-errors"></script>
+    <script src="js/lobby-config.js?v=20260608-split"></script>
+    <script src="js/lobby.js?v=20260608-history-overlap"></script>
 </body>
 </html>

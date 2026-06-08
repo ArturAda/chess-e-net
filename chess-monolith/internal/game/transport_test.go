@@ -250,3 +250,14 @@ func TestHandler_GetGame_ReturnsVisualStateForCurrentParticipant(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "red", lightSquare["id"])
 }
+
+func TestResultForUser_AbandonedGame(t *testing.T) {
+	userID := uuid.New()
+	item := Game{
+		WhiteID: userID,
+		BlackID: uuid.New(),
+		Status:  StaleActiveGameStatus,
+	}
+
+	assert.Equal(t, StaleActiveGameStatus, resultForUser(item, userID))
+}

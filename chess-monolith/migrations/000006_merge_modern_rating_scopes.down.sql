@@ -1,0 +1,2 @@
+-- Irreversible data normalization: modern10/modern12 rating scopes are merged
+-- into the displayed classic + board_size scopes.

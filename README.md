@@ -53,7 +53,23 @@ PORT=8080
 DB_DSN=host=localhost user=postgres password=postgres dbname=chess_db port=5432 sslmode=disable
 JWT_SECRET=your_super_secret_key_here
 FRONTEND_DIST_DIR=frontend/dist
+ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
+MAX_REQUEST_BODY_BYTES=1048576
+API_RATE_LIMIT_REQUESTS_PER_MINUTE=240
+AUTH_RATE_LIMIT_REQUESTS_PER_MINUTE=20
+WS_RATE_LIMIT_REQUESTS_PER_MINUTE=60
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=your_smtp_username
+SMTP_PASSWORD=your_smtp_password
+SMTP_FROM=no-reply@example.com
+TURNSTILE_SITE_KEY=your_cloudflare_turnstile_site_key
+TURNSTILE_SECRET_KEY=your_cloudflare_turnstile_secret_key
 ```
+
+Email verification uses SMTP when `SMTP_HOST` and `SMTP_FROM` are set. If SMTP is not configured, verification codes are printed to the server logs for local development only. Verification codes expire after 1 minute.
+
+Cloudflare Turnstile is enabled only when `TURNSTILE_SECRET_KEY` is set. `TURNSTILE_SITE_KEY` is used by the frontend to render the registration widget.
 
 ### Local Development Setup
 

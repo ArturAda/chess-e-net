@@ -2,6 +2,7 @@ package users
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -17,6 +18,54 @@ func setupTestDB() *gorm.DB {
 		return nil
 	}
 	return db
+}
+
+func TestRepository_EmailVerificationLifecycle(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	user := &User{
+		Username:     "verify",
+		Email:        "verify@test.local",
+		PasswordHash: "hash",
+	}
+	require.NoError(t, repo.CreateUser(user))
+
+	expiresAt := time.Now().UTC().Add(15 * time.Minute)
+	require.NoError(t, repo.UpdateEmailVerification(user.ID, "hash-1", expiresAt))
+
+	found, err := repo.GetUserByEmail("verify@test.local")
+	require.NoError(t, err)
+	assert.False(t, found.EmailVerified)
+	assert.Equal(t, "hash-1", found.EmailVerificationCodeHash)
+	require.NotNil(t, found.EmailVerificationExpiresAt)
+
+	verifiedAt := time.Now().UTC()
+	require.NoError(t, repo.MarkEmailVerified(user.ID, verifiedAt))
+
+	found, err = repo.GetUserByEmail("verify@test.local")
+	require.NoError(t, err)
+	assert.True(t, found.EmailVerified)
+	assert.Empty(t, found.EmailVerificationCodeHash)
+	assert.Nil(t, found.EmailVerificationExpiresAt)
+	require.NotNil(t, found.EmailVerifiedAt)
+}
+
+func TestRepository_GetUserByEmailTreatsSQLPayloadAsValue(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	require.NoError(t, repo.CreateUser(&User{
+		Username:     "safeuser",
+		Email:        "safe@test.local",
+		PasswordHash: "hash",
+	}))
+
+	_, err := repo.GetUserByEmail("safe@test.local' OR '1'='1")
+
+	assert.ErrorIs(t, err, ErrUserNotFound)
 }
 
 func TestRepository_UserLifecycle(t *testing.T) {
@@ -165,6 +214,14 @@ func TestRepository_ApplyRatingResultUsesScope(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1184, user2Blitz.Rating)
 	assert.Equal(t, 1, user2Blitz.GamesPlayed)
+
+	var user1 User
+	require.NoError(t, db.First(&user1, "id = ?", user1ID).Error)
+	assert.Equal(t, 1216, user1.Rating)
+
+	var user2 User
+	require.NoError(t, db.First(&user2, "id = ?", user2ID).Error)
+	assert.Equal(t, 1184, user2.Rating)
 
 	user1Rapid, err := repo.GetOrCreateRating(user1ID, rapidScope)
 	require.NoError(t, err)
