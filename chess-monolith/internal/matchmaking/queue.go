@@ -16,6 +16,20 @@ import (
 	"github.com/google/uuid"
 )
 
+const queueSearchTimeout = time.Minute
+
+type ratingWindowTier struct {
+	Wait   time.Duration
+	Window int
+}
+
+var rankedRatingWindowTiers = []ratingWindowTier{
+	{Wait: 0, Window: 100},
+	{Wait: 15 * time.Second, Window: 200},
+	{Wait: 30 * time.Second, Window: 350},
+	{Wait: 45 * time.Second, Window: 600},
+}
+
 // QueueKey позволяет группировать игроков по режиму, размеру доски и лимиту времени.
 type QueueKey struct {
 	Mode      string
@@ -27,6 +41,7 @@ type QueueKey struct {
 type Matchmaker struct {
 	rankedQueues map[QueueKey][]*ws.Client
 	casualQueues map[QueueKey][]*ws.Client
+	queuedAt     map[string]time.Time
 	mu           sync.Mutex
 	registry     *core.Registry
 	repo         game.Repository
@@ -37,6 +52,7 @@ func NewMatchmaker(registry *core.Registry, repo game.Repository, userRepo users
 	return &Matchmaker{
 		rankedQueues: make(map[QueueKey][]*ws.Client),
 		casualQueues: make(map[QueueKey][]*ws.Client),
+		queuedAt:     make(map[string]time.Time),
 		registry:     registry,
 		repo:         repo,
 		userRepo:     userRepo,
@@ -69,6 +85,7 @@ func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, boardSize int, is
 	defer m.mu.Unlock()
 
 	m.removePlayerUnsafe(client) // Чтобы игрок не стоял в двух очередях сразу
+	m.queuedAt[client.UserID] = time.Now()
 
 	if isRanked {
 		m.rankedQueues[key] = append(m.rankedQueues[key], client)
@@ -82,6 +99,8 @@ func (m *Matchmaker) AddPlayer(client *ws.Client, mode string, boardSize int, is
 }
 
 func (m *Matchmaker) removePlayerUnsafe(client *ws.Client) {
+	delete(m.queuedAt, client.UserID)
+
 	for key, queue := range m.rankedQueues {
 		for i, c := range queue {
 			if c.UserID == client.UserID {
@@ -112,7 +131,9 @@ func (m *Matchmaker) Run() {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		now := time.Now()
 		m.mu.Lock()
+		m.removeExpiredPlayersUnsafe(now)
 
 		// Обработка обычных игр
 		for key, queue := range m.casualQueues {
@@ -133,7 +154,7 @@ func (m *Matchmaker) Run() {
 
 				var remaining []*ws.Client
 				for i := 0; i < len(queue); {
-					if i+1 < len(queue) && abs(queue[i+1].Rating-queue[i].Rating) <= 100 {
+					if i+1 < len(queue) && m.canPairRankedPlayersUnsafe(queue[i], queue[i+1], now) {
 						p1, p2 := queue[i], queue[i+1]
 						m.startGame(p1, p2, key.Mode, key.BoardSize, true, key.TimeLimit)
 						i += 2
@@ -150,6 +171,66 @@ func (m *Matchmaker) Run() {
 	}
 }
 
+func (m *Matchmaker) canPairRankedPlayersUnsafe(player1, player2 *ws.Client, now time.Time) bool {
+	ratingDiff := abs(player2.Rating - player1.Rating)
+	maxWait := maxQueueWait(m.queueWaitUnsafe(player1, now), m.queueWaitUnsafe(player2, now))
+	return ratingDiff <= rankedRatingWindowForWait(maxWait)
+}
+
+func (m *Matchmaker) queueWaitUnsafe(client *ws.Client, now time.Time) time.Duration {
+	joinedAt, ok := m.queuedAt[client.UserID]
+	if !ok || now.Before(joinedAt) {
+		return 0
+	}
+	return now.Sub(joinedAt)
+}
+
+func maxQueueWait(wait1, wait2 time.Duration) time.Duration {
+	if wait1 > wait2 {
+		return wait1
+	}
+	return wait2
+}
+
+func rankedRatingWindowForWait(wait time.Duration) int {
+	if wait < 0 {
+		wait = 0
+	}
+
+	window := rankedRatingWindowTiers[0].Window
+	for _, tier := range rankedRatingWindowTiers {
+		if wait >= tier.Wait {
+			window = tier.Window
+			continue
+		}
+		break
+	}
+	return window
+}
+
+func (m *Matchmaker) removeExpiredPlayersUnsafe(now time.Time) {
+	for key, queue := range m.casualQueues {
+		m.casualQueues[key] = m.filterActiveQueuePlayersUnsafe(queue, now)
+	}
+	for key, queue := range m.rankedQueues {
+		m.rankedQueues[key] = m.filterActiveQueuePlayersUnsafe(queue, now)
+	}
+}
+
+func (m *Matchmaker) filterActiveQueuePlayersUnsafe(queue []*ws.Client, now time.Time) []*ws.Client {
+	active := queue[:0]
+	for _, client := range queue {
+		joinedAt, ok := m.queuedAt[client.UserID]
+		if ok && now.Sub(joinedAt) >= queueSearchTimeout {
+			delete(m.queuedAt, client.UserID)
+			log.Printf("User %s removed from matchmaking queue after timeout", client.UserID)
+			continue
+		}
+		active = append(active, client)
+	}
+	return active
+}
+
 func abs(x int) int {
 	if x < 0 {
 		return -x
@@ -159,6 +240,9 @@ func abs(x int) int {
 
 // startGame связывает двух клиентов и запускает таймеры
 func (m *Matchmaker) startGame(player1, player2 *ws.Client, mode string, boardSize int, isRanked bool, timeLimit time.Duration) {
+	delete(m.queuedAt, player1.UserID)
+	delete(m.queuedAt, player2.UserID)
+
 	// Используем динамический timeLimit
 	sess, err := session.NewSession(m.registry, mode, timeLimit)
 	if err != nil {

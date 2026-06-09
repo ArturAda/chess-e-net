@@ -356,3 +356,66 @@ func TestMatchmaker_RankedMatch_Fail(t *testing.T) {
 	assert.Equal(t, 2, len(mm.rankedQueues[key]))
 	mm.mu.Unlock()
 }
+
+func TestRankedRatingWindowForWaitExpandsOverSearchTime(t *testing.T) {
+	assert.Equal(t, 100, rankedRatingWindowForWait(0))
+	assert.Equal(t, 100, rankedRatingWindowForWait(14*time.Second))
+	assert.Equal(t, 200, rankedRatingWindowForWait(15*time.Second))
+	assert.Equal(t, 350, rankedRatingWindowForWait(30*time.Second))
+	assert.Equal(t, 600, rankedRatingWindowForWait(45*time.Second))
+	assert.Equal(t, 600, rankedRatingWindowForWait(59*time.Second))
+}
+
+func TestMatchmaker_RankedMatchWindowExpandsAfterWaiting(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("classic", &DummyMode{})
+	mm := NewMatchmaker(reg, &DummyGameRepo{}, &DummyUserRepo{})
+
+	c1ID := uuid.New()
+	c2ID := uuid.New()
+	mm.userRepo = &DummyUserRepo{Ratings: map[uuid.UUID]int{
+		c1ID: 1500,
+		c2ID: 1800,
+	}}
+
+	c1 := &ws.Client{UserID: c1ID.String(), Send: make(chan []byte, 10)}
+	c2 := &ws.Client{UserID: c2ID.String(), Send: make(chan []byte, 10)}
+
+	require.NoError(t, mm.AddPlayer(c1, "classic", 8, true, 10*time.Minute))
+	require.NoError(t, mm.AddPlayer(c2, "classic", 8, true, 10*time.Minute))
+
+	now := time.Now()
+	assert.False(t, mm.canPairRankedPlayersUnsafe(c1, c2, now))
+
+	mm.queuedAt[c1.UserID] = now.Add(-31 * time.Second)
+	assert.True(t, mm.canPairRankedPlayersUnsafe(c1, c2, now))
+}
+
+func TestMatchmaker_RemovesExpiredRankedPlayers(t *testing.T) {
+	reg := core.NewRegistry()
+	reg.Register("classic", &DummyMode{})
+	mm := NewMatchmaker(reg, &DummyGameRepo{}, &DummyUserRepo{})
+
+	c1ID := uuid.New()
+	c2ID := uuid.New()
+	mm.userRepo = &DummyUserRepo{Ratings: map[uuid.UUID]int{
+		c1ID: 1500,
+		c2ID: 1800,
+	}}
+
+	c1 := &ws.Client{UserID: c1ID.String(), Send: make(chan []byte, 10)}
+	c2 := &ws.Client{UserID: c2ID.String(), Send: make(chan []byte, 10)}
+
+	require.NoError(t, mm.AddPlayer(c1, "classic", 8, true, 10*time.Minute))
+	require.NoError(t, mm.AddPlayer(c2, "classic", 8, true, 10*time.Minute))
+
+	mm.mu.Lock()
+	mm.queuedAt[c1.UserID] = time.Now().Add(-queueSearchTimeout - time.Second)
+	mm.queuedAt[c2.UserID] = time.Now().Add(-queueSearchTimeout - time.Second)
+	mm.removeExpiredPlayersUnsafe(time.Now())
+
+	key := QueueKey{Mode: "classic", BoardSize: 8, TimeLimit: 10 * time.Minute}
+	assert.Empty(t, mm.rankedQueues[key])
+	assert.Empty(t, mm.queuedAt)
+	mm.mu.Unlock()
+}

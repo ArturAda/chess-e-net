@@ -779,6 +779,31 @@ function cancelMatchmaking() {
     resetNetworkWarning();
 }
 
+function expireMatchmakingSearch() {
+    if (queuedForMatch) {
+        try {
+            matchmakingClient.cancel();
+        } catch (error) {
+            console.warn('Unable to cancel expired matchmaking search', error);
+        }
+    }
+
+    queuedForMatch = false;
+    activeMatchRequest = null;
+    selectedClassicSquare = null;
+    pendingClassicMove = null;
+    pendingPromotionMove = null;
+    classicSnapbackInProgress = false;
+    queuedClassicPositionUpdate = null;
+    currentValidMoves = {};
+    timerState = null;
+    clearClassicMoveHighlights();
+    clearCustomMoveHighlights();
+    hidePromotionPicker();
+    resetDrawOfferState();
+    resetNetworkWarning();
+}
+
 function isCurrentMatchRequest(mode, boardSize, timeControlMinutes, isRanked = activeMatchRequest?.isRanked) {
     return activeMatchRequest?.mode === mode
         && activeMatchRequest?.boardSize === boardSize
@@ -1452,6 +1477,7 @@ function tickGameTimer() {
     if (timerState.mode === 'search' && timerState.remaining.me === 0) {
         window.clearInterval(timerIntervalId);
         timerIntervalId = null;
+        expireMatchmakingSearch();
         showMatchNotFoundOverlay();
     }
 }
