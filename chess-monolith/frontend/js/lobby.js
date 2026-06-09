@@ -1627,23 +1627,15 @@ function resetEmojiChatSession() {
 }
 
 function sendEmojiMessage(item) {
-    if (activeRemoteGame && currentGameState?.status === 'active' && window.ChessSocket?.isOpen?.()) {
-        try {
-            ChessSocket.chatSticker(item.id);
-        } catch (error) {
-            setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not send the sticker.'));
-        }
+    if (!canUseGameAction()) {
         return;
     }
 
-    emojiMessages.push({
-        id: createUserId('chat-me'),
-        sender: 'me',
-        name: accountProfile.signedIn && accountProfile.username ? accountProfile.username : 'Me',
-        label: item.name,
-        src: item.src
-    });
-    renderEmojiMessages();
+    try {
+        ChessSocket.chatSticker(item.id);
+    } catch (error) {
+        setMatchmakingStatus(playerFacingErrorMessage(error, 'Could not send the sticker.'));
+    }
 }
 
 function handleChatStickerMessage(payload = {}) {

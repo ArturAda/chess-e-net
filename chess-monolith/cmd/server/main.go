@@ -1068,10 +1068,7 @@ func main() {
 	}()
 
 	// Основной игровой сервер
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
-	}
+	gameAddr := gameAddressFromEnv()
 
 	dsn := os.Getenv("DB_DSN")
 	jwtSecret := os.Getenv("JWT_SECRET")
@@ -1096,9 +1093,9 @@ func main() {
 
 	router := SetupRouter(userHandler, hub, userRepo, jwtSecret, matchmaker, gameRepo)
 
-	log.Println("Starting game server on port " + port)
+	log.Println("Starting game server on " + gameAddr)
 	server := &http.Server{
-		Addr:              ":" + port,
+		Addr:              gameAddr,
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
@@ -1108,6 +1105,18 @@ func main() {
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("Error starting game server: %v", err)
 	}
+}
+
+func gameAddressFromEnv() string {
+	host := strings.TrimSpace(os.Getenv("HOST"))
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := strings.TrimSpace(os.Getenv("PORT"))
+	if port == "" {
+		port = "8080"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func documentationAddressFromEnv() string {

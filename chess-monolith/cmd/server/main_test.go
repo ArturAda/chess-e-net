@@ -265,6 +265,20 @@ func TestLoadDotEnvFindsNestedConfigFromRepositoryRoot(t *testing.T) {
 	assert.Equal(t, "loaded", os.Getenv(key))
 }
 
+func TestGameAddressFromEnvDefaultsToLocalhost(t *testing.T) {
+	t.Setenv("HOST", "")
+	t.Setenv("PORT", "")
+
+	assert.Equal(t, "127.0.0.1:8080", gameAddressFromEnv())
+}
+
+func TestGameAddressFromEnvUsesConfiguredHostAndPort(t *testing.T) {
+	t.Setenv("HOST", "0.0.0.0")
+	t.Setenv("PORT", "8080")
+
+	assert.Equal(t, "0.0.0.0:8080", gameAddressFromEnv())
+}
+
 func TestRateLimitBlocksAuthBurst(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	t.Setenv("AUTH_RATE_LIMIT_REQUESTS_PER_MINUTE", "2")

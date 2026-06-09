@@ -39,6 +39,7 @@ services:
       - configs/.env
     environment:
       PORT: 8080
+      HOST: 0.0.0.0
       DOCS_HOST: 0.0.0.0
       DOCS_PORT: 65000
       GIN_MODE: release
@@ -53,6 +54,16 @@ services:
         condition: service_healthy
       migrator:
         condition: service_completed_successfully
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: chess_tunnel
+    env_file:
+      - configs/.env
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN}
+    restart: unless-stopped
+    depends_on:
+      - backend
 
 volumes:
   pgdata:

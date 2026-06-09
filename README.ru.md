@@ -50,6 +50,7 @@ Chessemag — это современная, расширяемая многоп
 
 ```env
 PORT=8080
+HOST=127.0.0.1
 DOCS_HOST=127.0.0.1
 DOCS_PORT=65000
 DB_DSN=host=localhost user=postgres password=postgres dbname=chess_db port=5432 sslmode=disable
@@ -67,6 +68,7 @@ SMTP_PASSWORD=your_smtp_password
 SMTP_FROM=no-reply@example.com
 TURNSTILE_SITE_KEY=your_cloudflare_turnstile_site_key
 TURNSTILE_SECRET_KEY=your_cloudflare_turnstile_secret_key
+TUNNEL_TOKEN=your_cloudflare_tunnel_token
 ```
 
 Подтверждение email использует SMTP, когда заполнены `SMTP_HOST` и `SMTP_FROM`. Если SMTP не настроен, код подтверждения печатается в логах сервера только для локальной разработки. Код подтверждения действует 1 минуту.
@@ -105,13 +107,12 @@ Cloudflare Turnstile включается только когда заполне
 
 ### Использование Docker
 
-Чтобы запустить весь стек (База данных + Приложение) через Docker Compose:
+Чтобы запустить весь стек через Docker Compose:
 
 ```bash
 cd chess-monolith
-docker compose up --build
+make up
 ```
-Это автоматически запустит PostgreSQL и бэкенд на Go. Примечание: вам все равно нужно убедиться, что фронтенд собран в `frontend/dist` перед сборкой Docker-образа, если вы хотите, чтобы его раздавал бинарный файл Go.
 
 ## Архитектура и структура кода
 

@@ -800,3 +800,33 @@ func TestClient_ChatStickerRequiresActiveGame(t *testing.T) {
 	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
 	assert.Equal(t, ErrorCodeNotInGame, payload.Code)
 }
+
+func TestClient_ChatStickerRequiresOpponentInSameActiveGame(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+	black.ActiveGame = nil
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "clown"})
+
+	msg := readClientMessage(t, white.Send)
+	assert.Equal(t, MessageTypeError, msg.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, ErrorCodeNotInGame, payload.Code)
+	assert.Empty(t, black.Send)
+}
+
+func TestClient_ChatStickerRequiresPairedOpponent(t *testing.T) {
+	white, black, _ := newActiveGameTestClients()
+	black.Opponent = nil
+
+	white.handleChatSticker(ChatStickerRequest{StickerID: "clown"})
+
+	msg := readClientMessage(t, white.Send)
+	assert.Equal(t, MessageTypeError, msg.Type)
+
+	var payload ErrorPayload
+	require.NoError(t, json.Unmarshal(msg.Payload, &payload))
+	assert.Equal(t, ErrorCodeNotInGame, payload.Code)
+	assert.Empty(t, black.Send)
+}

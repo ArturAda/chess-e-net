@@ -122,6 +122,9 @@ func (c *Client) isInActiveGameWithOpponent() bool {
 	if c == nil || c.ActiveGame == nil || c.Opponent == nil {
 		return false
 	}
+	if c.Opponent.ActiveGame != c.ActiveGame || c.Opponent.Opponent != c {
+		return false
+	}
 
 	c.ActiveGame.Mu.Lock()
 	status := c.ActiveGame.Status

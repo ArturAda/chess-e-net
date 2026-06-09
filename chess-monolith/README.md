@@ -50,6 +50,7 @@ Create a `configs/.env` file in the `chess-monolith` directory. You can create o
 
 ```env
 PORT=8080
+HOST=127.0.0.1
 DOCS_HOST=127.0.0.1
 DOCS_PORT=65000
 DB_DSN=host=localhost user=postgres password=postgres dbname=chess_db port=5432 sslmode=disable
@@ -67,6 +68,7 @@ SMTP_PASSWORD=your_smtp_password
 SMTP_FROM=no-reply@example.com
 TURNSTILE_SITE_KEY=your_cloudflare_turnstile_site_key
 TURNSTILE_SECRET_KEY=your_cloudflare_turnstile_secret_key
+TUNNEL_TOKEN=your_cloudflare_tunnel_token
 ```
 
 Email verification uses SMTP when `SMTP_HOST` and `SMTP_FROM` are set. If SMTP is not configured, verification codes are printed to the server logs for local development only. Verification codes expire after 1 minute.
@@ -105,13 +107,12 @@ Cloudflare Turnstile is enabled only when `TURNSTILE_SECRET_KEY` is set. `TURNST
 
 ### Docker Setup
 
-To run the entire stack (Database + Application) via Docker Compose:
+To run the entire stack through Docker Compose:
 
 ```bash
 cd chess-monolith
-docker compose up --build
+make up
 ```
-This will start PostgreSQL and the Go backend automatically. Note: You still need to ensure the frontend is built into `frontend/dist` before building the Docker image if you want it served by the Go binary.
 
 ## Architecture & Code Structure
 
