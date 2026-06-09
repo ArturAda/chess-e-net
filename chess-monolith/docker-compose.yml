@@ -6,7 +6,7 @@ services:
       - configs/.env
     restart: always
     ports:
-      - "15432:5432"
+      - "127.0.0.1:15432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -39,12 +39,15 @@ services:
       - configs/.env
     environment:
       PORT: 8080
+      DOCS_HOST: 0.0.0.0
+      DOCS_PORT: 65000
       GIN_MODE: release
       FRONTEND_DIST_DIR: /app/frontend/dist
       DB_DSN: host=postgres user=${POSTGRES_USER} password=${POSTGRES_PASSWORD} dbname=${POSTGRES_DB} port=5432 sslmode=disable TimeZone=UTC
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    expose:
+      - "8080"
+      - "65000"
     depends_on:
       postgres:
         condition: service_healthy

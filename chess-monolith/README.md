@@ -50,6 +50,8 @@ Create a `configs/.env` file in the `chess-monolith` directory. You can create o
 
 ```env
 PORT=8080
+DOCS_HOST=127.0.0.1
+DOCS_PORT=65000
 DB_DSN=host=localhost user=postgres password=postgres dbname=chess_db port=5432 sslmode=disable
 JWT_SECRET=your_super_secret_key_here
 FRONTEND_DIST_DIR=frontend/dist
@@ -99,7 +101,7 @@ Cloudflare Turnstile is enabled only when `TURNSTILE_SECRET_KEY` is set. `TURNST
    # Or using go run directly:
    # go run cmd/server/main.go
    ```
-   The application will be available at `http://localhost:8080`.
+   For local runs, the application will be available at `http://localhost:8080`, and the documentation at `http://localhost:65000`.
 
 ### Docker Setup
 

@@ -50,6 +50,8 @@ Chessemag — это современная, расширяемая многоп
 
 ```env
 PORT=8080
+DOCS_HOST=127.0.0.1
+DOCS_PORT=65000
 DB_DSN=host=localhost user=postgres password=postgres dbname=chess_db port=5432 sslmode=disable
 JWT_SECRET=your_super_secret_key_here
 FRONTEND_DIST_DIR=frontend/dist
@@ -99,7 +101,7 @@ Cloudflare Turnstile включается только когда заполне
    # Или используя go run напрямую:
    # go run cmd/server/main.go
    ```
-   Приложение будет доступно по адресу `http://localhost:8080`.
+   При локальном запуске приложение будет доступно по адресу `http://localhost:8080`, а документация по адресу `http://localhost:65000`.
 
 ### Использование Docker
 
