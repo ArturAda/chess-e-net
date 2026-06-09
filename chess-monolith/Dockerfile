@@ -25,6 +25,8 @@ RUN apk add --no-cache ca-certificates \
 
 COPY --from=backend-builder /out/chess-server /app/chess-server
 COPY --from=frontend-builder /src/frontend/dist /app/frontend/dist
+COPY README.md README.ru.md /app/
+COPY LICENSE /app/LICENSE
 
 ENV PORT=8080
 ENV GIN_MODE=release

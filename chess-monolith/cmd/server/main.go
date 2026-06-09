@@ -639,6 +639,7 @@ func documentationFileCandidates(name string) []string {
 
 	candidates := make([]string, 0, 6)
 	for _, root := range documentationRootCandidates() {
+		candidates = appendUniquePath(candidates, filepath.Join(root, name))
 		if isMonolithRoot(root) {
 			candidates = appendUniquePath(candidates, filepath.Join(root, name))
 			if name == "LICENSE" {

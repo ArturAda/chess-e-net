@@ -265,6 +265,20 @@ func TestLoadDotEnvFindsNestedConfigFromRepositoryRoot(t *testing.T) {
 	assert.Equal(t, "loaded", os.Getenv(key))
 }
 
+func TestReadDocumentationFileSupportsRuntimeDocsDirectory(t *testing.T) {
+	docsDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "README.md"), []byte("english docs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "README.ru.md"), []byte("russian docs"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "LICENSE"), []byte("license text"), 0o644))
+	t.Chdir(docsDir)
+
+	content, path, err := readDocumentationFile("LICENSE")
+
+	require.NoError(t, err)
+	assert.Equal(t, []byte("license text"), content)
+	assert.Equal(t, filepath.Join(docsDir, "LICENSE"), path)
+}
+
 func TestGameAddressFromEnvDefaultsToLocalhost(t *testing.T) {
 	t.Setenv("HOST", "")
 	t.Setenv("PORT", "")
