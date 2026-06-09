@@ -350,6 +350,121 @@ func TestService_ResendVerificationCode_UpdatesHashAndSends(t *testing.T) {
 	mockRepo.AssertExpectations(t)
 }
 
+func TestService_ResendVerificationCode_NoopsAndErrors(t *testing.T) {
+	t.Run("empty email is ignored", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{})
+
+		err := service.ResendVerificationCode("   ")
+
+		assert.NoError(t, err)
+		mockRepo.AssertNotCalled(t, "GetUserByEmail", mock.Anything)
+	})
+
+	t.Run("unknown email is ignored", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{})
+		mockRepo.On("GetUserByEmail", "missing@mail.com").Return(nil, ErrUserNotFound)
+
+		err := service.ResendVerificationCode("missing@mail.com")
+
+		assert.NoError(t, err)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("verified user is ignored", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{})
+		mockRepo.On("GetUserByEmail", "verified@mail.com").Return(&User{
+			ID:            uuid.New(),
+			Email:         "verified@mail.com",
+			EmailVerified: true,
+		}, nil)
+
+		err := service.ResendVerificationCode("verified@mail.com")
+
+		assert.NoError(t, err)
+		mockRepo.AssertNotCalled(t, "UpdateEmailVerification", mock.Anything, mock.Anything, mock.Anything)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("repository lookup error is returned", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{})
+		mockRepo.On("GetUserByEmail", "error@mail.com").Return(nil, ErrDatabase)
+
+		err := service.ResendVerificationCode("error@mail.com")
+
+		assert.Equal(t, ErrDatabase, err)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("empty stored email blocks delivery", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{})
+		mockRepo.On("GetUserByEmail", "empty@mail.com").Return(&User{
+			ID:            uuid.New(),
+			Email:         "   ",
+			EmailVerified: false,
+		}, nil)
+
+		err := service.ResendVerificationCode("empty@mail.com")
+
+		assert.Equal(t, ErrEmailDelivery, err)
+		mockRepo.AssertNotCalled(t, "UpdateEmailVerification", mock.Anything, mock.Anything, mock.Anything)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("update error is returned before email delivery", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		emailSender := &FakeEmailSender{}
+		service := NewServiceWithEmailSender(mockRepo, "secret", emailSender)
+		userID := uuid.New()
+		mockRepo.On("GetUserByEmail", "test@mail.com").Return(&User{
+			ID:            userID,
+			Email:         "test@mail.com",
+			EmailVerified: false,
+		}, nil)
+		mockRepo.On("UpdateEmailVerification", userID, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).
+			Return(ErrDatabase)
+
+		err := service.ResendVerificationCode("test@mail.com")
+
+		assert.Equal(t, ErrDatabase, err)
+		assert.Empty(t, emailSender.sentTo)
+		mockRepo.AssertExpectations(t)
+	})
+
+	t.Run("email delivery error is returned", func(t *testing.T) {
+		mockRepo := new(MockRepository)
+		emailSender := &FakeEmailSender{err: ErrEmailDelivery}
+		service := NewServiceWithEmailSender(mockRepo, "secret", emailSender)
+		userID := uuid.New()
+		mockRepo.On("GetUserByEmail", "test@mail.com").Return(&User{
+			ID:            userID,
+			Email:         "test@mail.com",
+			EmailVerified: false,
+		}, nil)
+		mockRepo.On("UpdateEmailVerification", userID, mock.AnythingOfType("string"), mock.AnythingOfType("time.Time")).
+			Return(nil)
+
+		err := service.ResendVerificationCode("test@mail.com")
+
+		assert.Equal(t, ErrEmailDelivery, err)
+		assert.Equal(t, []string{"test@mail.com"}, emailSender.sentTo)
+		mockRepo.AssertExpectations(t)
+	})
+}
+
+func TestService_RefreshVerificationCodeDirectNoops(t *testing.T) {
+	mockRepo := new(MockRepository)
+	service := NewServiceWithEmailSender(mockRepo, "secret", &FakeEmailSender{}).(*service)
+
+	assert.NoError(t, service.refreshVerificationCode(nil))
+	assert.NoError(t, service.refreshVerificationCode(&User{EmailVerified: true}))
+	mockRepo.AssertNotCalled(t, "UpdateEmailVerification", mock.Anything, mock.Anything, mock.Anything)
+}
+
 func TestService_GetCurrentUser_Success(t *testing.T) {
 	mockRepo := new(MockRepository)
 	secret := "secret"

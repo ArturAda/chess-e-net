@@ -261,3 +261,49 @@ func TestResultForUser_AbandonedGame(t *testing.T) {
 
 	assert.Equal(t, StaleActiveGameStatus, resultForUser(item, userID))
 }
+
+func TestTransportHelperBranches(t *testing.T) {
+	whiteID := uuid.New()
+	blackID := uuid.New()
+	otherID := uuid.New()
+	game := Game{
+		WhiteID:          whiteID,
+		BlackID:          blackID,
+		Status:           "white_won_checkmate",
+		BoardState:       `{"ok":true}`,
+		WhiteVisualState: `{"theme":"white"}`,
+		BlackVisualState: `{bad-json`,
+	}
+
+	token, ok := bearerTokenFromHeader("bearer token-value")
+	assert.True(t, ok)
+	assert.Equal(t, "token-value", token)
+	_, ok = bearerTokenFromHeader("Bearer token with spaces")
+	assert.False(t, ok)
+	_, ok = bearerTokenFromHeader("Token token-value")
+	assert.False(t, ok)
+
+	assert.JSONEq(t, `{"ok":true}`, string(normalizedJSONState(` {"ok":true} `)))
+	assert.JSONEq(t, `{}`, string(normalizedJSONState("")))
+	assert.JSONEq(t, `{}`, string(normalizedJSONState("{bad")))
+
+	assert.JSONEq(t, `{"theme":"white"}`, string(visualStateForUser(game, whiteID)))
+	assert.JSONEq(t, `{}`, string(visualStateForUser(game, blackID)))
+	assert.JSONEq(t, `{}`, string(visualStateForUser(game, otherID)))
+
+	assert.Equal(t, "white", playerColorForGame(game, whiteID))
+	assert.Equal(t, "black", playerColorForGame(game, blackID))
+	assert.Equal(t, "", playerColorForGame(game, otherID))
+
+	assert.Equal(t, "active", resultForUser(Game{WhiteID: whiteID, BlackID: blackID, Status: "active"}, whiteID))
+	assert.Equal(t, "draw", resultForUser(Game{WhiteID: whiteID, BlackID: blackID, Status: "draw_agreement"}, whiteID))
+	assert.Equal(t, "unknown", resultForUser(Game{WhiteID: whiteID, BlackID: blackID, Status: "cancelled"}, whiteID))
+	assert.Equal(t, "win", resultForUser(game, whiteID))
+	assert.Equal(t, "loss", resultForUser(game, blackID))
+	assert.Equal(t, "loss", resultForUser(Game{WhiteID: whiteID, BlackID: blackID, Status: "black_won_resign"}, whiteID))
+
+	assert.Nil(t, winnerIDString(nil))
+	winnerID := winnerIDString(&whiteID)
+	require.NotNil(t, winnerID)
+	assert.Equal(t, whiteID.String(), *winnerID)
+}

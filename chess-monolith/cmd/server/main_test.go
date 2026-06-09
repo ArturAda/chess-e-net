@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -279,6 +280,149 @@ func TestReadDocumentationFileSupportsRuntimeDocsDirectory(t *testing.T) {
 	assert.Equal(t, filepath.Join(docsDir, "LICENSE"), path)
 }
 
+func TestServeDocumentationFileRendersAllowedDocsAndRejectsMissing(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	docsDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(docsDir, "README.md"), []byte("# Docs\n\nHello **world**."), 0o644))
+	t.Chdir(docsDir)
+
+	router := gin.New()
+	router.GET("/README.md", func(c *gin.Context) {
+		serveDocumentationFile(c, "README.md")
+	})
+	router.GET("/missing", func(c *gin.Context) {
+		serveDocumentationFile(c, "missing.md")
+	})
+
+	okRecorder := httptest.NewRecorder()
+	okReq, err := http.NewRequest(http.MethodGet, "/README.md", nil)
+	require.NoError(t, err)
+	router.ServeHTTP(okRecorder, okReq)
+
+	assert.Equal(t, http.StatusOK, okRecorder.Code)
+	assert.Equal(t, "no-cache", okRecorder.Header().Get("Cache-Control"))
+	assert.Contains(t, okRecorder.Body.String(), "<h1>Docs</h1>")
+	assert.Contains(t, okRecorder.Body.String(), "<strong>world</strong>")
+
+	missingRecorder := httptest.NewRecorder()
+	missingReq, err := http.NewRequest(http.MethodGet, "/missing", nil)
+	require.NoError(t, err)
+	router.ServeHTTP(missingRecorder, missingReq)
+
+	assert.Equal(t, http.StatusNotFound, missingRecorder.Code)
+	assert.Contains(t, missingRecorder.Body.String(), "Not found")
+}
+
+func TestRenderDocumentationPageAndBody(t *testing.T) {
+	markdown := strings.Join([]string{
+		"<!-- hidden comment -->",
+		"[![Coverage](badge.svg)](#)",
+		"# Main Title",
+		"Intro **strong** and `code` with [safe](https://example.com) and [bad](javascript:alert(1)).",
+		"",
+		"## Section",
+		"* bullet one",
+		"- bullet two",
+		"1. ordered one",
+		"> quoted text",
+		"```",
+		"<script>alert(1)</script>",
+		"```",
+		"continued paragraph",
+		"on another line",
+	}, "\n")
+
+	body := renderDocumentationBody("README.md", []byte(markdown))
+	assert.Contains(t, body, "<h1>Main Title</h1>")
+	assert.Contains(t, body, "<strong>strong</strong>")
+	assert.Contains(t, body, "<code>code</code>")
+	assert.Contains(t, body, `<a href="https://example.com">safe</a>`)
+	assert.Contains(t, body, "bad")
+	assert.NotContains(t, body, `href="javascript:alert(1)"`)
+	assert.Contains(t, body, "<ul><li>bullet one</li><li>bullet two</li></ul>")
+	assert.Contains(t, body, "<ol><li>ordered one</li></ol>")
+	assert.Contains(t, body, "<blockquote>quoted text</blockquote>")
+	assert.Contains(t, body, "&lt;script&gt;alert(1)&lt;/script&gt;")
+	assert.Contains(t, body, "<p>continued paragraph on another line</p>")
+	assert.NotContains(t, body, "hidden comment")
+	assert.NotContains(t, body, "Coverage")
+
+	licenseHTML := renderDocumentationBody("LICENSE", []byte("Line one\nline two\n\nLine three"))
+	assert.Contains(t, licenseHTML, `<section class="license-text">`)
+	assert.Contains(t, licenseHTML, "Line one<br>line two")
+	assert.Contains(t, licenseHTML, "<p>Line three</p>")
+
+	page := string(renderDocumentationPage("README.ru.md", []byte("# Русская документация")))
+	assert.Contains(t, page, "<title>Документация Chess-E-Net</title>")
+	assert.Contains(t, page, `<a href="/LICENSE">LICENSE</a>`)
+	assert.Contains(t, page, "<h1>Русская документация</h1>")
+}
+
+func TestDocumentationInlineHelpers(t *testing.T) {
+	assert.Equal(t, "Chess-E-Net documentation", documentationTitle("README.md"))
+	assert.Equal(t, "Документация Chess-E-Net", documentationTitle("README.ru.md"))
+	assert.Equal(t, "MIT License", documentationTitle("LICENSE"))
+	assert.Equal(t, "Chess-E-Net documentation", documentationTitle("unknown"))
+
+	level, text := markdownHeading("### Heading")
+	assert.Equal(t, 3, level)
+	assert.Equal(t, "Heading", text)
+	level, text = markdownHeading("###NoSpace")
+	assert.Equal(t, 0, level)
+	assert.Empty(t, text)
+
+	item, ok := unorderedListItem("* item")
+	assert.True(t, ok)
+	assert.Equal(t, "item", item)
+	item, ok = orderedListItem("12. item")
+	assert.True(t, ok)
+	assert.Equal(t, "item", item)
+	_, ok = orderedListItem("12.item")
+	assert.False(t, ok)
+
+	assert.True(t, isSafeDocumentationHref("https://example.com/docs"))
+	assert.True(t, isSafeDocumentationHref("mailto:test@example.com"))
+	assert.True(t, isSafeDocumentationHref("/README.md"))
+	assert.False(t, isSafeDocumentationHref(""))
+	assert.False(t, isSafeDocumentationHref("//example.com"))
+	assert.False(t, isSafeDocumentationHref("../secret"))
+	assert.False(t, isSafeDocumentationHref("javascript:alert(1)"))
+	assert.False(t, isSafeDocumentationHref("bad\x00path"))
+
+	assert.Equal(t, "a <code>b</code> c", replaceInlineCode("a `b` c"))
+	assert.Equal(t, "a `b", replaceInlineCode("a `b"))
+	assert.Equal(t, "a <strong>b</strong> c", replaceStrongText("a **b** c"))
+	assert.Equal(t, "a **b", replaceStrongText("a **b"))
+}
+
+func TestDocumentationPathHelpers(t *testing.T) {
+	assert.True(t, isAllowedDocumentationFile("README.md"))
+	assert.True(t, isAllowedDocumentationFile("README.ru.md"))
+	assert.True(t, isAllowedDocumentationFile("LICENSE"))
+	assert.False(t, isAllowedDocumentationFile("configs/.env"))
+
+	root := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "cmd", "server"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module test"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "cmd", "server", "main.go"), []byte("package main"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(root, "README.md"), []byte("docs"), 0o644))
+
+	assert.True(t, isMonolithRoot(root))
+	assert.False(t, isRepositoryRoot(root))
+	assert.True(t, fileExists(filepath.Join(root, "README.md")))
+	assert.False(t, fileExists(filepath.Join(root, "missing.md")))
+
+	candidates := documentationFileCandidates("../README.md")
+	for _, candidate := range candidates {
+		assert.Equal(t, "README.md", filepath.Base(candidate))
+	}
+
+	paths := appendUniquePath(nil, " README.md ")
+	paths = appendUniquePath(paths, "README.md")
+	paths = appendUniquePath(paths, "")
+	assert.Equal(t, []string{"README.md"}, paths)
+}
+
 func TestGameAddressFromEnvDefaultsToLocalhost(t *testing.T) {
 	t.Setenv("HOST", "")
 	t.Setenv("PORT", "")
@@ -291,6 +435,85 @@ func TestGameAddressFromEnvUsesConfiguredHostAndPort(t *testing.T) {
 	t.Setenv("PORT", "8080")
 
 	assert.Equal(t, "0.0.0.0:8080", gameAddressFromEnv())
+}
+
+func TestDocumentationAddressFromEnv(t *testing.T) {
+	t.Setenv("DOCS_HOST", "")
+	t.Setenv("DOCS_PORT", "")
+	assert.Equal(t, "127.0.0.1:65000", documentationAddressFromEnv())
+
+	t.Setenv("DOCS_HOST", "0.0.0.0")
+	t.Setenv("DOCS_PORT", "65001")
+	assert.Equal(t, "0.0.0.0:65001", documentationAddressFromEnv())
+}
+
+func TestRequestLimitAndEnvHelpers(t *testing.T) {
+	t.Setenv("MAX_REQUEST_BODY_BYTES", "")
+	assert.Equal(t, int64(1<<20), maxRequestBodyBytes())
+
+	t.Setenv("MAX_REQUEST_BODY_BYTES", "2048")
+	assert.Equal(t, int64(2048), maxRequestBodyBytes())
+
+	t.Setenv("MAX_REQUEST_BODY_BYTES", "-1")
+	assert.Equal(t, int64(1<<20), maxRequestBodyBytes())
+
+	t.Setenv("CHESS_INT_TEST", "")
+	assert.Equal(t, 7, intEnv("CHESS_INT_TEST", 7))
+	t.Setenv("CHESS_INT_TEST", "12")
+	assert.Equal(t, 12, intEnv("CHESS_INT_TEST", 7))
+	t.Setenv("CHESS_INT_TEST", "bad")
+	assert.Equal(t, 7, intEnv("CHESS_INT_TEST", 7))
+}
+
+func TestRateLimitHelpersCoverScopesAndCleanup(t *testing.T) {
+	settings := rateLimitSettings{
+		Window:             time.Minute,
+		APIRequestsPerMin:  10,
+		AuthRequestsPerMin: 2,
+		WSRequestsPerMin:   3,
+	}
+
+	scope, limit := rateLimitScope("/api/login", settings)
+	assert.Equal(t, "auth", scope)
+	assert.Equal(t, 2, limit)
+	scope, limit = rateLimitScope("/ws", settings)
+	assert.Equal(t, "ws", scope)
+	assert.Equal(t, 3, limit)
+	scope, limit = rateLimitScope("/api/games", settings)
+	assert.Equal(t, "api", scope)
+	assert.Equal(t, 10, limit)
+	scope, limit = rateLimitScope("/images/logo.png", settings)
+	assert.Empty(t, scope)
+	assert.Zero(t, limit)
+
+	limiter := newIPRateLimiter(settings)
+	now := time.Now()
+	allowed, resetAt := limiter.allow("ip|auth", 1, now)
+	assert.True(t, allowed)
+	assert.True(t, resetAt.After(now))
+	allowed, _ = limiter.allow("ip|auth", 1, now.Add(time.Second))
+	assert.False(t, allowed)
+	allowed, _ = limiter.allow("ip|auth", 1, now.Add(2*time.Minute))
+	assert.True(t, allowed)
+}
+
+func TestFrontendCacheHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+
+	setFrontendCacheHeaders(context, "assets/app.js")
+	assert.Equal(t, "public, max-age=31536000, immutable", recorder.Header().Get("Cache-Control"))
+
+	recorder = httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(recorder)
+	setFrontendCacheHeaders(context, "images/piece.png")
+	assert.Equal(t, "public, max-age=86400", recorder.Header().Get("Cache-Control"))
+
+	recorder = httptest.NewRecorder()
+	context, _ = gin.CreateTestContext(recorder)
+	setFrontendCacheHeaders(context, "index.html")
+	assert.Equal(t, "no-cache", recorder.Header().Get("Cache-Control"))
 }
 
 func TestRateLimitBlocksAuthBurst(t *testing.T) {

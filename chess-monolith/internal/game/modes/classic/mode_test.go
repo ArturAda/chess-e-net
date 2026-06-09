@@ -112,6 +112,16 @@ func TestSetupSupportsModernBoardSizes(t *testing.T) {
 	}
 }
 
+func TestModeDefaultsUnsupportedBoardSize(t *testing.T) {
+	board := NewMode(14).Setup()
+	assert.Equal(t, 8, board.Width)
+	assert.Equal(t, 8, board.Height)
+
+	var mode *Mode
+	assert.Equal(t, 8, mode.size())
+	assert.Equal(t, []string{"rook", "knight", "bishop", "queen", "king", "bishop", "knight", "rook"}, backRankForSize(99))
+}
+
 func TestModernPawnRulesUseBoardHeight(t *testing.T) {
 	mode := NewMode(10)
 	board := mode.Setup()

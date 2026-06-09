@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -451,6 +452,67 @@ func TestHandler_ResendVerification(t *testing.T) {
 	mockService.AssertExpectations(t)
 }
 
+func TestHandler_ResendVerification_ErrorScenarios(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name           string
+		body           []byte
+		setupMock      func(*MockService)
+		expectedStatus int
+	}{
+		{
+			name:           "invalid body",
+			body:           []byte(`{"email":"bad-email"}`),
+			setupMock:      func(*MockService) {},
+			expectedStatus: http.StatusBadRequest,
+		},
+		{
+			name: "email delivery",
+			body: []byte(`{"email":"test@mail.com"}`),
+			setupMock: func(mockService *MockService) {
+				mockService.On("ResendVerificationCode", "test@mail.com").Return(ErrEmailDelivery)
+			},
+			expectedStatus: http.StatusBadGateway,
+		},
+		{
+			name: "database",
+			body: []byte(`{"email":"test@mail.com"}`),
+			setupMock: func(mockService *MockService) {
+				mockService.On("ResendVerificationCode", "test@mail.com").Return(ErrDatabase)
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+		{
+			name: "generic error",
+			body: []byte(`{"email":"test@mail.com"}`),
+			setupMock: func(mockService *MockService) {
+				mockService.On("ResendVerificationCode", "test@mail.com").Return(errors.New("unexpected"))
+			},
+			expectedStatus: http.StatusInternalServerError,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockService := new(MockService)
+			tt.setupMock(mockService)
+			handler := NewHandler(mockService)
+			router := gin.Default()
+			handler.SetupRoutes(router)
+
+			w := httptest.NewRecorder()
+			req, _ := http.NewRequest(http.MethodPost, "/api/resend-verification", bytes.NewBuffer(tt.body))
+			req.Header.Set("Content-Type", "application/json")
+
+			router.ServeHTTP(w, req)
+
+			assert.Equal(t, tt.expectedStatus, w.Code)
+			mockService.AssertExpectations(t)
+		})
+	}
+}
+
 func TestHandler_Register_InvalidJSONBody(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	mockService := new(MockService)
@@ -784,4 +846,58 @@ func TestBearerTokenFromHeader(t *testing.T) {
 			assert.Equal(t, tt.wantToken, token)
 		})
 	}
+}
+
+func TestQueryHelperBranches(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	newQueryContext := func(rawQuery string) *gin.Context {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		req, _ := http.NewRequest(http.MethodGet, "/api/leaderboard?"+rawQuery, nil)
+		c.Request = req
+		return c
+	}
+
+	scope, err := ratingScopeFromQuery(newQueryContext(""))
+	assert.NoError(t, err)
+	assert.Equal(t, RatingScope{Mode: "classic", BoardSize: 8, TimeLimitMs: defaultRatingTimeLimitMs}, scope)
+
+	scope, err = ratingScopeFromQuery(newQueryContext("mode=custom&board_size=9&time_limit_ms=123000"))
+	assert.NoError(t, err)
+	assert.Equal(t, RatingScope{Mode: "custom", BoardSize: 9, TimeLimitMs: 123000}, scope)
+
+	_, err = ratingScopeFromQuery(newQueryContext("board_size=bad"))
+	assert.EqualError(t, err, "board_size must be an integer")
+
+	value, err := timeLimitMsFromQuery(newQueryContext("time_limit_minutes=5"))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(300000), value)
+
+	value, err = timeLimitMsFromQuery(newQueryContext("time_limit=30"))
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1800000), value)
+
+	_, err = timeLimitMsFromQuery(newQueryContext("time_limit_ms=0"))
+	assert.EqualError(t, err, "time_limit_ms must be a positive integer")
+
+	_, err = timeLimitMsFromQuery(newQueryContext("time_limit_minutes=bad"))
+	assert.EqualError(t, err, "time_limit_minutes must be a positive integer")
+
+	_, err = timeLimitMsFromQuery(newQueryContext("time_limit=0"))
+	assert.EqualError(t, err, "time_limit must be a positive integer")
+
+	limit, err := leaderboardLimitFromQuery(newQueryContext("limit=500"))
+	assert.NoError(t, err)
+	assert.Equal(t, 100, limit)
+
+	_, err = leaderboardLimitFromQuery(newQueryContext("limit=0"))
+	assert.EqualError(t, err, "limit must be positive")
+
+	_, err = leaderboardLimitFromQuery(newQueryContext("limit=bad"))
+	assert.EqualError(t, err, "limit must be an integer")
+
+	boardSize, err := intQuery(newQueryContext(""), "board_size", 8)
+	assert.NoError(t, err)
+	assert.Equal(t, 8, boardSize)
 }

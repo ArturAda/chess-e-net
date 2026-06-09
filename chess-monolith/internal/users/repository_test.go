@@ -133,6 +133,36 @@ func TestRepository_UserLifecycle(t *testing.T) {
 	})
 }
 
+func TestRepository_UpdateRatings(t *testing.T) {
+	db := setupTestDB()
+	require.NotNil(t, db)
+
+	repo := NewRepository(db)
+	user1 := &User{
+		Username:     "rating-one",
+		Email:        "rating-one@test.local",
+		PasswordHash: "hash",
+		Rating:       1200,
+	}
+	user2 := &User{
+		Username:     "rating-two",
+		Email:        "rating-two@test.local",
+		PasswordHash: "hash",
+		Rating:       1200,
+	}
+	require.NoError(t, repo.CreateUser(user1))
+	require.NoError(t, repo.CreateUser(user2))
+
+	require.NoError(t, repo.UpdateRatings(user1.ID, user2.ID, 1240, 1160))
+
+	updated1, err := repo.GetUserByID(user1.ID)
+	require.NoError(t, err)
+	updated2, err := repo.GetUserByID(user2.ID)
+	require.NoError(t, err)
+	assert.Equal(t, 1240, updated1.Rating)
+	assert.Equal(t, 1160, updated2.Rating)
+}
+
 func TestRepository_GetOrCreateRating(t *testing.T) {
 	db := setupTestDB()
 	require.NotNil(t, db)
